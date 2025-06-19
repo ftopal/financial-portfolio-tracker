@@ -167,6 +167,7 @@ class Security(models.Model):
     # Trading information
     exchange = models.CharField(max_length=50, blank=True)
     currency = models.CharField(max_length=3, default='USD')
+    country = models.CharField(max_length=100, blank=True)
 
     # Current market data
     current_price = models.DecimalField(

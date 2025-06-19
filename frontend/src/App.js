@@ -4,7 +4,7 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import PortfolioAssets from './pages/assets/PortfolioAssets';
+import PortfolioTransactions from './pages/assets/PortfolioTransactions';
 import Navigation from './components/Navigation';
 import Assets from './pages/Assets';
 import GroupedAssets from './pages/GroupedAssets';
@@ -80,7 +80,7 @@ function App() {
             path="/portfolios/:portfolioId/assets"
             element={
               <ProtectedRoute>
-                <PortfolioAssets />
+                <PortfolioTransactions />
               </ProtectedRoute>
             }
           />

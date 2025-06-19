@@ -8,17 +8,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class StockImportService:
+class SecurityImportService:
     """Service to import and search stocks from Yahoo Finance"""
 
     @staticmethod
-    def search_and_import_stock(symbol):
+    def search_and_import_security(symbol):
         """Search for a stock and import it if found"""
         try:
             # Check if already exists
-            existing_stock = Stock.objects.filter(symbol__iexact=symbol).first()
-            if existing_stock:
-                return {'exists': True, 'stock': existing_stock}
+            existing_security = Security.objects.filter(symbol__iexact=symbol).first()
+            if existing_security:
+                return {'exists': True, 'security': existing_security}
 
             # Fetch from Yahoo Finance
             ticker = yf.Ticker(symbol.upper())
@@ -47,32 +47,32 @@ class StockImportService:
                 'week_52_low': Decimal(str(info.get('fiftyTwoWeekLow', 0))) if info.get('fiftyTwoWeekLow') else None,
             }
 
-            # Determine asset type
+            # Determine security type
             if 'ETF' in stock_data['name'].upper() or info.get('quoteType') == 'ETF':
-                stock_data['asset_type'] = 'ETF'
+                stock_data['security_type'] = 'ETF'
             elif info.get('quoteType') == 'CRYPTOCURRENCY':
-                stock_data['asset_type'] = 'CRYPTO'
+                stock_data['security_type'] = 'CRYPTO'
             else:
-                stock_data['asset_type'] = 'STOCK'
+                stock_data['security_type'] = 'STOCK'
 
             # Create stock
-            stock = Stock.objects.create(**stock_data)
-            logger.info(f"Imported new stock: {stock}")
+            security = Security.objects.create(**stock_data)
+            logger.info(f"Imported new security: {security}")
 
-            return {'exists': False, 'stock': stock, 'created': True}
+            return {'exists': False, 'security': security, 'created': True}
 
         except Exception as e:
             logger.error(f"Error importing stock {symbol}: {str(e)}")
             return {'exists': False, 'error': str(e)}
 
     @staticmethod
-    def search_stocks(query):
+    def search_securities(query):
         """Search for stocks in database"""
         if not query or len(query) < 1:
             return []
 
         # Search in database first
-        stocks = Stock.objects.filter(
+        stocks = Security.objects.filter(
             Q(symbol__icontains=query) |  # Use Q instead of models.Q
             Q(name__icontains=query)
         ).filter(is_active=True)[:10]

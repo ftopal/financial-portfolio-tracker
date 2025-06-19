@@ -23,7 +23,7 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
       setError('');
 
       try {
-        const response = await api.stocks.search(query);
+        const response = await api.securities.search(query);
         setSearchResults(response.data.results);
 
         // If no results in database, offer to search Yahoo Finance
@@ -51,7 +51,7 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
     setError('');
 
     try {
-      const response = await api.stocks.import(searchTerm);
+      const response = await api.securities.import(searchTerm);
 
       if (response.data.stock) {
         setSelectedStock(response.data.stock);

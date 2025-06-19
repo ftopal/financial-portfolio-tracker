@@ -1,30 +1,9 @@
 from rest_framework import serializers
-from .models import AssetCategory, Asset, Transaction, Portfolio, PriceHistory, Stock
-from django.contrib.auth.models import User
+from .models import (
+    Portfolio, AssetCategory, Security, Transaction,
+    PriceHistory, RealEstateAsset, User
+)
 from decimal import Decimal
-
-
-class PortfolioSerializer(serializers.ModelSerializer):
-    asset_count = serializers.SerializerMethodField()  # Unique stocks
-    transaction_count = serializers.SerializerMethodField()  # Total transactions
-    total_value = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Portfolio
-        fields = ['id', 'name', 'description', 'created_at', 'updated_at',
-                  'asset_count', 'transaction_count', 'total_value']
-
-    def get_asset_count(self, obj):
-        # Count unique stocks
-        unique_stocks = obj.assets.values('stock').distinct().count()
-        return unique_stocks
-
-    def get_transaction_count(self, obj):
-        # Count total transactions
-        return obj.assets.count()
-
-    def get_total_value(self, obj):
-        return sum(asset.total_value for asset in obj.assets.all())
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -39,51 +18,154 @@ class AssetCategorySerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class AssetSerializer(serializers.ModelSerializer):
-    category_name = serializers.ReadOnlyField(source='category.name')
-    portfolio_name = serializers.ReadOnlyField(source='portfolio.name')
-    current_price = serializers.ReadOnlyField()  # Now comes from property
-    stock_last_updated = serializers.ReadOnlyField(source='stock.last_updated')
-    gain_loss = serializers.ReadOnlyField()
-    gain_loss_percentage = serializers.ReadOnlyField()
-    total_value = serializers.ReadOnlyField()
-    total_cost = serializers.SerializerMethodField()
+class SecuritySerializer(serializers.ModelSerializer):
+    price_change = serializers.ReadOnlyField()
+    price_change_pct = serializers.ReadOnlyField()
 
     class Meta:
-        model = Asset
-        fields = '__all__'
-        read_only_fields = ['user', 'created_at', 'updated_at', 'stock']
-
-    def get_total_cost(self, obj):
-        return float(obj.purchase_price * obj.quantity)
+        model = Security
+        fields = [
+            'id', 'symbol', 'name', 'security_type', 'exchange', 'currency', 'country',
+            'current_price', 'last_updated', 'price_change', 'price_change_pct',
+            'market_cap', 'volume', 'day_high', 'day_low', 'week_52_high',
+            'week_52_low', 'pe_ratio', 'dividend_yield', 'sector', 'industry',
+            'is_active', 'data_source'
+        ]
 
 
 class TransactionSerializer(serializers.ModelSerializer):
-    asset_name = serializers.ReadOnlyField(source='asset.name')
-    asset_symbol = serializers.ReadOnlyField(source='asset.symbol')
-    portfolio_name = serializers.ReadOnlyField(source='asset.portfolio.name')
+    security_symbol = serializers.ReadOnlyField(source='security.symbol')
+    security_name = serializers.ReadOnlyField(source='security.name')
+    portfolio_name = serializers.ReadOnlyField(source='portfolio.name')
     total_value = serializers.ReadOnlyField()
 
     class Meta:
         model = Transaction
-        fields = '__all__'
-        read_only_fields = ['user', 'created_at']
+        fields = [
+            'id', 'portfolio', 'portfolio_name', 'security', 'security_symbol',
+            'security_name', 'transaction_type', 'transaction_date', 'quantity',
+            'price', 'fees', 'total_value', 'dividend_per_share', 'notes',
+            'created_at'
+        ]
+        read_only_fields = ['user', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        # Auto-set user from request
+        validated_data['user'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class HoldingSerializer(serializers.Serializer):
+    """Serializer for portfolio holdings (calculated data)"""
+    security = SecuritySerializer()
+    quantity = serializers.DecimalField(max_digits=20, decimal_places=8)
+    avg_cost = serializers.DecimalField(max_digits=20, decimal_places=8)
+    current_value = serializers.DecimalField(max_digits=20, decimal_places=2)
+    total_cost = serializers.DecimalField(max_digits=20, decimal_places=2)
+    unrealized_gains = serializers.DecimalField(max_digits=20, decimal_places=2)
+    realized_gains = serializers.DecimalField(max_digits=20, decimal_places=2)
+    total_gains = serializers.DecimalField(max_digits=20, decimal_places=2)
+    total_dividends = serializers.DecimalField(max_digits=20, decimal_places=2)
+    gain_loss_pct = serializers.SerializerMethodField()
+    transactions_count = serializers.SerializerMethodField()
+
+    def get_gain_loss_pct(self, obj):
+        if obj['quantity'] > 0 and obj['avg_cost'] > 0:
+            total_cost = obj['quantity'] * obj['avg_cost']
+            return float((obj['unrealized_gains'] / total_cost) * 100)
+        return 0
+
+    def get_transactions_count(self, obj):
+        return len(obj.get('transactions', []))
+
+
+class PortfolioSerializer(serializers.ModelSerializer):
+    total_value = serializers.SerializerMethodField()
+    total_cost = serializers.SerializerMethodField()
+    total_gains = serializers.SerializerMethodField()
+    holdings_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Portfolio
+        fields = [
+            'id', 'name', 'description', 'is_default', 'currency',
+            'created_at', 'updated_at', 'total_value', 'total_cost',
+            'total_gains', 'holdings_count'
+        ]
+        read_only_fields = ['user', 'created_at', 'updated_at']
+
+    def get_total_value(self, obj):
+        summary = obj.get_summary()
+        return float(summary['total_value'])
+
+    def get_total_cost(self, obj):
+        summary = obj.get_summary()
+        return float(summary['total_cost'])
+
+    def get_total_gains(self, obj):
+        summary = obj.get_summary()
+        return float(summary['total_gains'])
+
+    def get_holdings_count(self, obj):
+        summary = obj.get_summary()
+        return summary['holdings_count']
+
+
+class PortfolioDetailSerializer(PortfolioSerializer):
+    """Detailed portfolio serializer with holdings"""
+    holdings = serializers.SerializerMethodField()
+    summary = serializers.SerializerMethodField()
+
+    class Meta(PortfolioSerializer.Meta):
+        fields = PortfolioSerializer.Meta.fields + ['holdings', 'summary']
+
+    def get_holdings(self, obj):
+        holdings = obj.get_holdings()
+        return [
+            {
+                'security': SecuritySerializer(data['security']).data,
+                'quantity': float(data['quantity']),
+                'avg_cost': float(data['avg_cost']),
+                'current_value': float(data['current_value']),
+                'total_cost': float(data['quantity'] * data['avg_cost']),
+                'unrealized_gains': float(data['unrealized_gains']),
+                'realized_gains': float(data['realized_gains']),
+                'total_gains': float(data['total_gains']),
+                'total_dividends': float(data['total_dividends']),
+            }
+            for data in holdings.values()
+        ]
+
+    def get_summary(self, obj):
+        summary = obj.get_summary()
+        return {
+            'total_value': float(summary['total_value']),
+            'total_cost': float(summary['total_cost']),
+            'total_gains': float(summary['total_gains']),
+            'total_dividends': float(summary['total_dividends']),
+            'total_return': float(summary['total_return']),
+            'total_return_pct': float(summary['total_return_pct']),
+            'holdings_count': summary['holdings_count']
+        }
 
 
 class PriceHistorySerializer(serializers.ModelSerializer):
-    asset_name = serializers.ReadOnlyField(source='asset.name')
+    security_symbol = serializers.ReadOnlyField(source='security.symbol')
 
     class Meta:
         model = PriceHistory
-        fields = ['id', 'asset', 'asset_name', 'date', 'price', 'volume']
-
-
-class StockSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Stock
         fields = [
-            'id', 'symbol', 'name', 'asset_type', 'exchange',
-            'currency', 'current_price', 'last_updated', 'sector',
-            'industry', 'market_cap', 'pe_ratio', 'day_high',
-            'day_low', 'volume', 'week_52_high', 'week_52_low'
+            'id', 'security', 'security_symbol', 'date', 'open_price',
+            'high_price', 'low_price', 'close_price', 'adjusted_close',
+            'volume'
         ]
+
+
+class RealEstateAssetSerializer(serializers.ModelSerializer):
+    unrealized_gain = serializers.ReadOnlyField()
+    unrealized_gain_pct = serializers.ReadOnlyField()
+
+    class Meta:
+        model = RealEstateAsset
+        fields = '__all__'
+        read_only_fields = ['user', 'created_at', 'updated_at']

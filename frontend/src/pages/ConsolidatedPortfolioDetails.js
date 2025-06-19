@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ChevronDown, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react';
 import api from '../services/api';
+import StockAutocomplete from '../components/StockAutocomplete';
 
 const ConsolidatedPortfolioDetails = () => {
   const { portfolioId } = useParams();
@@ -13,34 +14,38 @@ const ConsolidatedPortfolioDetails = () => {
   const [expandedRows, setExpandedRows] = useState({});
 
   // Add new state for transaction modal
-  const [showAddTransactionModal, setShowAddTransactionModal] = useState(false);
-  const [selectedAssetForTransaction, setSelectedAssetForTransaction] = useState(null);
-  const [transactionForm, setTransactionForm] = useState({
+  const [showAddNewTransactionModal, setShowAddNewTransactionModal] = useState(false);
+  const [newTransactionForm, setNewTransactionForm] = useState({
+    security_id: null,
+    transaction_type: 'BUY',
     quantity: '',
-    purchase_price: '',
-    purchase_date: '',
+    price: '',
+    transaction_date: new Date().toISOString().split('T')[0], // Default to today
+    fees: '0',
     notes: ''
   });
 
-  useEffect(() => {
-    fetchConsolidatedData();
-  }, [portfolioId]);
-
-  const fetchConsolidatedData = async () => {
+  const fetchConsolidatedData = useCallback(async () => {
     try {
       setLoading(true);
       const response = await api.portfolios.getConsolidatedView(portfolioId);
-      setPortfolio(response.data.portfolio);
-      setConsolidatedAssets(response.data.consolidated_assets);
-      setSummary(response.data.summary);
+
+      setPortfolio(response.data.portfolio || {});
+      setConsolidatedAssets(response.data.consolidated_assets || []);
+      setSummary(response.data.summary || {});
       setError('');
     } catch (err) {
       console.error('Error fetching consolidated data:', err);
       setError('Failed to load portfolio data');
+      setConsolidatedAssets([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [portfolioId]);
+
+  useEffect(() => {
+    fetchConsolidatedData();
+  }, [portfolioId, fetchConsolidatedData]);
 
   const toggleRow = (key) => {
     setExpandedRows(prev => ({
@@ -49,41 +54,32 @@ const ConsolidatedPortfolioDetails = () => {
     }));
   };
 
-  const handleAddTransaction = (asset) => {
-    setSelectedAssetForTransaction(asset);
-    setTransactionForm({
-      quantity: '',
-      purchase_price: '',
-      purchase_date: '',
-      notes: ''
-    });
-    setShowAddTransactionModal(true);
-  };
-
-  const handleTransactionSubmit = async (e) => {
+  const handleNewTransactionSubmit = async (e) => {
     e.preventDefault();
 
     try {
-      const assetData = {
-        stock_id: selectedAssetForTransaction.transactions[0]?.stock_id || null,
+      const transactionData = {
         portfolio: portfolioId,
-        symbol: selectedAssetForTransaction.symbol,
-        name: selectedAssetForTransaction.name,
-        asset_type: selectedAssetForTransaction.asset_type,
-        quantity: parseFloat(transactionForm.quantity),
-        purchase_price: parseFloat(transactionForm.purchase_price),
-        purchase_date: transactionForm.purchase_date,
-        notes: transactionForm.notes || '',
+        security: newTransactionForm.security_id,
+        transaction_type: newTransactionForm.transaction_type,
+        transaction_date: newTransactionForm.transaction_date,
+        quantity: parseFloat(newTransactionForm.quantity),
+        price: parseFloat(newTransactionForm.price),
+        fees: parseFloat(newTransactionForm.fees) || 0,
+        notes: newTransactionForm.notes || ''
       };
 
-      await api.assets.create(assetData);
+      await api.transactions.create(transactionData);
 
       // Close modal and refresh data
-      setShowAddTransactionModal(false);
-      setTransactionForm({
+      setShowAddNewTransactionModal(false);
+      setNewTransactionForm({
+        security_id: null,
+        transaction_type: 'BUY',
         quantity: '',
-        purchase_price: '',
-        purchase_date: '',
+        price: '',
+        transaction_date: new Date().toISOString().split('T')[0],
+        fees: '0',
         notes: ''
       });
       fetchConsolidatedData(); // Refresh the data
@@ -93,6 +89,7 @@ const ConsolidatedPortfolioDetails = () => {
       setError('Failed to add transaction');
     }
   };
+
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('en-US', {
@@ -294,7 +291,7 @@ const ConsolidatedPortfolioDetails = () => {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleAddTransaction(asset);
+                                  setShowAddNewTransactionModal(true);
                                 }}
                                 className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm font-medium"
                               >
@@ -344,24 +341,57 @@ const ConsolidatedPortfolioDetails = () => {
 
       {/* Action Buttons - Updated */}
       <div className="mt-6 flex space-x-4">
-        <Link
-          to={`/portfolios/${portfolioId}/assets`}
+        <button
+          onClick={() => setShowAddNewTransactionModal(true)}
           className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md"
         >
-          Add Asset
-        </Link>
+          Add New Transaction
+        </button>
       </div>
 
-      {/* Add Transaction Modal */}
-      {showAddTransactionModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+      {/* Add New Transaction Modal */}
+      {showAddNewTransactionModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md my-8">
             <h3 className="text-xl font-bold text-gray-900 mb-4">
-              Add Transaction for {selectedAssetForTransaction?.name}
+              Add New Transaction
             </h3>
 
-            <form onSubmit={handleTransactionSubmit}>
+            <form onSubmit={handleNewTransactionSubmit}>
               <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Security *
+                  </label>
+                  <StockAutocomplete
+                    onSelectStock={(security) => {
+                      setNewTransactionForm({
+                        ...newTransactionForm,
+                        security_id: security.id
+                      });
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Transaction Type *
+                  </label>
+                  <select
+                    value={newTransactionForm.transaction_type}
+                    onChange={(e) => setNewTransactionForm({
+                      ...newTransactionForm,
+                      transaction_type: e.target.value
+                    })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  >
+                    <option value="BUY">Buy</option>
+                    <option value="SELL">Sell</option>
+                    <option value="DIVIDEND">Dividend</option>
+                  </select>
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Quantity *
@@ -370,35 +400,60 @@ const ConsolidatedPortfolioDetails = () => {
                     type="number"
                     step="0.00000001"
                     required
-                    value={transactionForm.quantity}
-                    onChange={(e) => setTransactionForm({...transactionForm, quantity: e.target.value})}
+                    value={newTransactionForm.quantity}
+                    onChange={(e) => setNewTransactionForm({
+                      ...newTransactionForm,
+                      quantity: e.target.value
+                    })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Purchase Price *
+                    Price per Share *
                   </label>
                   <input
                     type="number"
                     step="0.0001"
                     required
-                    value={transactionForm.purchase_price}
-                    onChange={(e) => setTransactionForm({...transactionForm, purchase_price: e.target.value})}
+                    value={newTransactionForm.price}
+                    onChange={(e) => setNewTransactionForm({
+                      ...newTransactionForm,
+                      price: e.target.value
+                    })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Purchase Date *
+                    Transaction Date *
                   </label>
                   <input
                     type="date"
                     required
-                    value={transactionForm.purchase_date}
-                    onChange={(e) => setTransactionForm({...transactionForm, purchase_date: e.target.value})}
+                    value={newTransactionForm.transaction_date}
+                    onChange={(e) => setNewTransactionForm({
+                      ...newTransactionForm,
+                      transaction_date: e.target.value
+                    })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Fees
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={newTransactionForm.fees}
+                    onChange={(e) => setNewTransactionForm({
+                      ...newTransactionForm,
+                      fees: e.target.value
+                    })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -409,8 +464,11 @@ const ConsolidatedPortfolioDetails = () => {
                   </label>
                   <textarea
                     rows="3"
-                    value={transactionForm.notes}
-                    onChange={(e) => setTransactionForm({...transactionForm, notes: e.target.value})}
+                    value={newTransactionForm.notes}
+                    onChange={(e) => setNewTransactionForm({
+                      ...newTransactionForm,
+                      notes: e.target.value
+                    })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -419,14 +477,14 @@ const ConsolidatedPortfolioDetails = () => {
               <div className="flex justify-end space-x-3 mt-6">
                 <button
                   type="button"
-                  onClick={() => setShowAddTransactionModal(false)}
+                  onClick={() => setShowAddNewTransactionModal(false)}
                   className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md"
                 >
                   Add Transaction
                 </button>

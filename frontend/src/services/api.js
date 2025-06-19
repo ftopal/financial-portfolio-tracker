@@ -79,7 +79,7 @@ export const authAPI = {
 export const portfolioAPI = {
   getAll: () => API.get('portfolios/'),
   get: (id) => API.get(`portfolios/${id}/`),
-  getConsolidatedView: (portfolioId) => API.get(`portfolios/${portfolioId}/consolidated/`),
+  getConsolidatedView: (portfolioId) => API.get(`portfolios/${portfolioId}/holdings-consolidated/`),
   create: (data) => API.post('portfolios/', data),
   update: (id, data) => API.put(`portfolios/${id}/`, data),
   delete: (id) => API.delete(`portfolios/${id}/`),
@@ -132,11 +132,11 @@ export const categoryAPI = {
 };
 
 // Stock services
-export const stockAPI = {
-  search: (query) => API.get(`stocks/search/?q=${query}`),
-  import: (symbol) => API.post('stocks/import_stock/', { symbol }),
-  get: (id) => API.get(`stocks/${id}/`),
-  getAll: () => API.get('stocks/'),
+export const securityAPI = {
+  search: (query) => API.get(`securities/search/?q=${query}`),
+  import: (symbol) => API.post('securities/import_security/', { symbol }),
+  get: (id) => API.get(`securities/${id}/`),
+  getAll: () => API.get('securities/'),
 };
 
 // Helper function to handle errors
@@ -173,7 +173,7 @@ const api = {
     assets: assetAPI,
     transactions: transactionAPI,
     categories: categoryAPI,
-    stocks: stockAPI,
+    securities: securityAPI,
     handleError: handleAPIError
 };
 

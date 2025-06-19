@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from . import views_new as views
+from . import views
 
 router = DefaultRouter()
 router.register(r'portfolios', views.PortfolioViewSet, basename='portfolio')
