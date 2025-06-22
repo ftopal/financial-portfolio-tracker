@@ -24,15 +24,18 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
 
       try {
         const response = await api.securities.search(query);
-        setSearchResults(response.data.results);
+        // The API returns an array directly, not response.data.results
+        const results = Array.isArray(response.data) ? response.data : [];
+        setSearchResults(results);
 
         // If no results in database, offer to search Yahoo Finance
-        if (response.data.results.length === 0) {
+        if (results.length === 0) {
           setError(`No results found. Try importing "${query.toUpperCase()}" from Yahoo Finance.`);
         }
       } catch (err) {
         setError('Error searching stocks');
         console.error(err);
+        setSearchResults([]);
       } finally {
         setIsLoading(false);
       }
@@ -53,10 +56,10 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
     try {
       const response = await api.securities.import(searchTerm);
 
-      if (response.data.stock) {
-        setSelectedStock(response.data.stock);
-        setSearchResults([response.data.stock]);
-        onSelectStock(response.data.stock);
+      if (response.data.security) {
+        setSelectedStock(response.data.security);
+        setSearchResults([response.data.security]);
+        onSelectStock(response.data.security);
         setError('');
       }
     } catch (err) {
@@ -80,11 +83,25 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
     }).format(amount || 0);
   };
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!event.target.closest('.stock-autocomplete-container')) {
+        setShowDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
   return (
-    <div className="relative">
+    <div className="relative stock-autocomplete-container">
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">
-          Stock Symbol *
+          Security Symbol *
         </label>
         <div className="relative">
           <input
@@ -116,7 +133,7 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
             <div>
               <p className="font-medium text-gray-900">{selectedStock.name}</p>
               <p className="text-sm text-gray-600">
-                {selectedStock.exchange} • {selectedStock.sector}
+                {selectedStock.exchange || 'N/A'} • {selectedStock.sector || selectedStock.security_type}
               </p>
             </div>
             <div className="text-right">
@@ -130,7 +147,7 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
       {/* Dropdown */}
       {showDropdown && searchTerm && !selectedStock && (
         <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
-          {searchResults.length > 0 ? (
+          {searchResults && searchResults.length > 0 ? (
             searchResults.map((stock) => (
               <div
                 key={stock.id}
@@ -143,7 +160,7 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
                       {stock.symbol} - {stock.name}
                     </p>
                     <p className="text-sm text-gray-500">
-                      {stock.exchange} • {stock.asset_type}
+                      {stock.exchange || 'N/A'} • {stock.security_type || stock.asset_type}
                     </p>
                   </div>
                   <div className="text-right">
@@ -162,14 +179,16 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
                   </p>
                 </div>
               )}
-              <button
-                type="button"
-                onClick={handleImportStock}
-                disabled={isLoading}
-                className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium disabled:opacity-50"
-              >
-                {isLoading ? 'Importing...' : `Import ${searchTerm} from Yahoo Finance`}
-              </button>
+              {!isLoading && searchTerm && (
+                <button
+                  type="button"
+                  onClick={handleImportStock}
+                  disabled={isLoading}
+                  className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium disabled:opacity-50"
+                >
+                  {isLoading ? 'Importing...' : `Import ${searchTerm} from Yahoo Finance`}
+                </button>
+              )}
             </div>
           )}
         </div>

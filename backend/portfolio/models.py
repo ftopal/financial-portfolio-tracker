@@ -323,13 +323,28 @@ class Transaction(models.Model):
         if self.transaction_date > timezone.now():
             raise ValidationError("Transaction date cannot be in the future.")
 
-        # Validate dividend fields
-        if self.transaction_type == 'DIVIDEND' and not self.dividend_per_share:
-            raise ValidationError("Dividend per share is required for dividend transactions.")
+        # Validate dividend fields - if dividend_per_share is not set, calculate it
+        if self.transaction_type == 'DIVIDEND':
+            if not self.dividend_per_share and self.price and self.quantity:
+                # Don't raise error, just set dividend_per_share from price
+                # This allows frontend to send total amount as price
+                self.dividend_per_share = self.price
+            elif not self.dividend_per_share:
+                raise ValidationError("Dividend per share or price is required for dividend transactions.")
 
         # Validate split ratio
         if self.transaction_type == 'SPLIT' and not self.split_ratio:
             raise ValidationError("Split ratio is required for stock split transactions.")
+
+    def save(self, *args, **kwargs):
+        # Ensure dividend_per_share is set for dividends before saving
+        if self.transaction_type == 'DIVIDEND' and not self.dividend_per_share:
+            self.dividend_per_share = self.price
+
+        # Call clean to run validations
+        self.full_clean()
+
+        super().save(*args, **kwargs)
 
 
 class PriceHistory(models.Model):

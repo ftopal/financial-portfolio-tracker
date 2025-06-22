@@ -25,7 +25,16 @@ class PortfolioViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Portfolio.objects.filter(user=self.request.user)
+        # Annotate with counts for better performance
+        return Portfolio.objects.filter(user=self.request.user).annotate(
+            transaction_count=Count('transactions'),
+            # Count unique securities with BUY transactions
+            asset_count=Count(
+                'transactions__security',
+                filter=Q(transactions__transaction_type='BUY'),
+                distinct=True
+            )
+        )
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -60,66 +69,119 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         holdings_data.sort(key=lambda x: x['current_value'], reverse=True)
 
         return Response({
-            'portfolio': PortfolioSerializer(portfolio).data,
             'holdings': holdings_data,
             'summary': portfolio.get_summary()
         })
 
     @action(detail=True, methods=['get'])
-    def transactions(self, request, pk=None):
-        """Get all transactions for a portfolio"""
+    def performance(self, request, pk=None):
+        """Get portfolio performance over time"""
         portfolio = self.get_object()
-        transactions = portfolio.transactions.select_related('security').order_by('-transaction_date')
+        days = int(request.query_params.get('days', 30))
 
-        # Optional filtering
-        security_id = request.query_params.get('security_id')
-        if security_id:
-            transactions = transactions.filter(security_id=security_id)
+        end_date = timezone.now()
+        start_date = end_date - timedelta(days=days)
 
-        transaction_type = request.query_params.get('type')
-        if transaction_type:
-            transactions = transactions.filter(transaction_type=transaction_type)
+        # Get all transactions up to end date
+        transactions = portfolio.transactions.filter(
+            transaction_date__lte=end_date
+        ).select_related('security')
 
-        serializer = TransactionSerializer(transactions, many=True)
-        return Response(serializer.data)
+        # Calculate daily values
+        performance_data = []
+        current_date = start_date
+
+        while current_date <= end_date:
+            daily_value = Decimal('0')
+
+            # Get holdings as of current_date
+            for security in transactions.values('security').distinct():
+                security_transactions = transactions.filter(
+                    security=security['security'],
+                    transaction_date__lte=current_date
+                )
+
+                # Calculate quantity held
+                quantity = security_transactions.filter(
+                    transaction_type='BUY'
+                ).aggregate(
+                    total=Coalesce(Sum('quantity'), Decimal('0'))
+                )['total'] - security_transactions.filter(
+                    transaction_type='SELL'
+                ).aggregate(
+                    total=Coalesce(Sum('quantity'), Decimal('0'))
+                )['total']
+
+                if quantity > 0:
+                    # Get price for this date
+                    price_history = PriceHistory.objects.filter(
+                        security_id=security['security'],
+                        date__date=current_date.date()
+                    ).first()
+
+                    if price_history:
+                        daily_value += quantity * price_history.close_price
+
+            performance_data.append({
+                'date': current_date.date(),
+                'value': float(daily_value)
+            })
+
+            current_date += timedelta(days=1)
+
+        return Response(performance_data)
 
 
 class SecurityViewSet(viewsets.ModelViewSet):
-    queryset = Security.objects.filter(is_active=True)
+    queryset = Security.objects.all()
     serializer_class = SecuritySerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        # Filtering
+        security_type = self.request.query_params.get('type')
+        if security_type:
+            queryset = queryset.filter(security_type=security_type)
+
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(symbol__icontains=search) | Q(name__icontains=search)
+            )
+
+        return queryset.filter(is_active=True)
+
     @action(detail=False, methods=['get'])
     def search(self, request):
-        """Search securities in database"""
+        """Search securities by symbol or name"""
         query = request.query_params.get('q', '')
-        if not query:
-            return Response({'results': []})
+        if len(query) < 2:
+            return Response([])
 
         securities = Security.objects.filter(
             Q(symbol__icontains=query) | Q(name__icontains=query),
             is_active=True
         )[:20]
 
-        serializer = SecuritySerializer(securities, many=True)
-        return Response({'results': serializer.data})
+        return Response(SecuritySerializer(securities, many=True).data)
 
     @action(detail=False, methods=['post'])
     def import_security(self, request):
-        """Import a security from external data source"""
-        symbol = request.data.get('symbol', '').strip().upper()
-
+        """Import security data from external source"""
+        symbol = request.data.get('symbol')
         if not symbol:
             return Response({'error': 'Symbol is required'}, status=400)
 
-        result = SecurityImportService.search_and_import_security(symbol)
+        service = SecurityImportService()
+        result = service.import_security(symbol)
 
         if result.get('error'):
-            return Response({'error': result['error']}, status=404)
+            return Response({'error': result['error']}, status=400)
 
-        serializer = SecuritySerializer(result['security'])
         return Response({
-            'security': serializer.data,
+            'security': SecuritySerializer(result['security']).data,
             'created': result.get('created', False),
             'exists': result.get('exists', False)
         })
@@ -238,15 +300,25 @@ def portfolio_holdings_consolidated(request, portfolio_id):
     for security_id, data in holdings.items():
         # Build transactions list in the format the frontend expects
         transactions = []
+
+        # Include ALL transaction types, not just BUY
         for transaction in data['transactions']:
+            transaction_data = {
+                'id': transaction.id,
+                'stock_id': transaction.security.id,
+                'transaction_type': transaction.transaction_type,
+                'transaction_date': transaction.transaction_date,
+                'quantity': float(transaction.quantity),
+                'price': float(transaction.price),
+                'current_price': float(data['security'].current_price),
+                'fees': float(transaction.fees),
+            }
+
+            # Add specific fields based on transaction type
             if transaction.transaction_type == 'BUY':
-                transactions.append({
-                    'id': transaction.id,
-                    'stock_id': transaction.security.id,
-                    'purchase_date': transaction.transaction_date,
-                    'quantity': float(transaction.quantity),
-                    'purchase_price': float(transaction.price),
-                    'current_price': float(data['security'].current_price),
+                transaction_data.update({
+                    'purchase_date': transaction.transaction_date,  # For compatibility
+                    'purchase_price': float(transaction.price),  # For compatibility
                     'value': float(transaction.quantity * data['security'].current_price),
                     'cost': float(transaction.quantity * transaction.price),
                     'gain_loss': float((data['security'].current_price - transaction.price) * transaction.quantity),
@@ -255,8 +327,28 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                         if transaction.price > 0 else 0
                     )
                 })
+            elif transaction.transaction_type == 'SELL':
+                transaction_data.update({
+                    'purchase_date': transaction.transaction_date,  # For compatibility
+                    'purchase_price': float(transaction.price),  # For compatibility
+                    'value': float(transaction.quantity * transaction.price),
+                    'proceeds': float(transaction.quantity * transaction.price - transaction.fees)
+                })
+            elif transaction.transaction_type == 'DIVIDEND':
+                transaction_data.update({
+                    'purchase_date': transaction.transaction_date,  # For compatibility
+                    'dividend_per_share': float(
+                        transaction.dividend_per_share) if transaction.dividend_per_share else 0,
+                    'total_dividend': float(transaction.total_value),
+                    'purchase_price': 0,  # No purchase price for dividends
+                    'value': float(transaction.total_value),
+                    'gain_loss': 0,
+                    'gain_loss_percentage': 0
+                })
 
-        # Only include if there are buy transactions
+            transactions.append(transaction_data)
+
+        # Only include if there are transactions and positive quantity
         if transactions and data['quantity'] > 0:
             consolidated_asset = {
                 'key': f"{data['security'].symbol}_{security_id}",
@@ -270,11 +362,12 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 'total_current_value': float(data['current_value']),
                 'total_cost': float(data['quantity'] * data['avg_cost']),
                 'total_gain_loss': float(data['unrealized_gains']),
+                'total_dividends': float(data['total_dividends']),
                 'gain_loss_percentage': float(
                     (data['unrealized_gains'] / (data['quantity'] * data['avg_cost']) * 100)
                     if data['quantity'] > 0 and data['avg_cost'] > 0 else 0
                 ),
-                'transactions': sorted(transactions, key=lambda x: x['purchase_date'], reverse=True)
+                'transactions': sorted(transactions, key=lambda x: x['transaction_date'], reverse=True)
             }
             consolidated_assets.append(consolidated_asset)
 
@@ -286,6 +379,7 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         'total_value': sum(item['total_current_value'] for item in consolidated_assets),
         'total_cost': sum(item['total_cost'] for item in consolidated_assets),
         'total_gain_loss': sum(item['total_gain_loss'] for item in consolidated_assets),
+        'total_dividends': sum(item['total_dividends'] for item in consolidated_assets),
         'unique_assets': len(consolidated_assets),
         'total_transactions': sum(len(item['transactions']) for item in consolidated_assets)
     }

@@ -84,13 +84,18 @@ class PortfolioSerializer(serializers.ModelSerializer):
     total_cost = serializers.SerializerMethodField()
     total_gains = serializers.SerializerMethodField()
     holdings_count = serializers.SerializerMethodField()
+    asset_count = serializers.SerializerMethodField()
+    transaction_count = serializers.SerializerMethodField()
+    total_gain_loss = serializers.SerializerMethodField()
+    gain_loss_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = Portfolio
         fields = [
             'id', 'name', 'description', 'is_default', 'currency',
             'created_at', 'updated_at', 'total_value', 'total_cost',
-            'total_gains', 'holdings_count'
+            'total_gains', 'holdings_count', 'asset_count', 'transaction_count',
+            'total_gain_loss', 'gain_loss_percentage'
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
 
@@ -109,6 +114,30 @@ class PortfolioSerializer(serializers.ModelSerializer):
     def get_holdings_count(self, obj):
         summary = obj.get_summary()
         return summary['holdings_count']
+
+    def get_asset_count(self, obj):
+        # Use annotated field if available, otherwise calculate
+        if hasattr(obj, 'asset_count'):
+            return obj.asset_count
+        # Count unique securities with positive quantity
+        holdings = obj.get_holdings()
+        return len(holdings)
+
+    def get_transaction_count(self, obj):
+        # Use annotated field if available, otherwise calculate
+        if hasattr(obj, 'transaction_count'):
+            return obj.transaction_count
+        # Count all transactions for this portfolio
+        return obj.transactions.count()
+
+    def get_total_gain_loss(self, obj):
+        # This is the same as total_gains but named differently for frontend compatibility
+        summary = obj.get_summary()
+        return float(summary['total_gains'])
+
+    def get_gain_loss_percentage(self, obj):
+        summary = obj.get_summary()
+        return float(summary['total_return_pct'])
 
 
 class PortfolioDetailSerializer(PortfolioSerializer):

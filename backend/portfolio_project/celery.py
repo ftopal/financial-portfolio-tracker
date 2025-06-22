@@ -16,20 +16,29 @@ app.autodiscover_tasks()
 
 # Configure periodic tasks
 app.conf.beat_schedule = {
-    'update-stock-prices-every-15-minutes': {
-        'task': 'portfolio.tasks.update_all_stock_prices',
+    'update-security-prices-every-15-minutes': {
+        'task': 'portfolio.tasks.update_all_security_prices',
         'schedule': crontab(minute='*/15', hour='9-16', day_of_week='1-5'),  # Every 15 min, 9AM-4PM, Mon-Fri
     },
-    'update-stock-prices-at-market-open': {
-        'task': 'portfolio.tasks.update_all_stock_prices',
+    'update-security-prices-at-market-open': {
+        'task': 'portfolio.tasks.update_all_security_prices',
         'schedule': crontab(minute='30', hour='9', day_of_week='1-5'),  # 9:30 AM Mon-Fri
     },
-    'update-stock-prices-at-market-close': {
-        'task': 'portfolio.tasks.update_all_stock_prices',
+    'update-security-prices-at-market-close': {
+        'task': 'portfolio.tasks.update_all_security_prices',
         'schedule': crontab(minute='0', hour='16', day_of_week='1-5'),  # 4:00 PM Mon-Fri
+    },
+    'update-crypto-prices-hourly': {
+        'task': 'portfolio.tasks.update_securities_by_type',
+        'schedule': crontab(minute='0'),  # Every hour for crypto
+        'args': ('CRYPTO',)
     },
     'cleanup-old-price-history': {
         'task': 'portfolio.tasks.cleanup_old_price_history',
         'schedule': crontab(hour='2', minute='0'),  # Daily at 2 AM
     },
 }
+
+@app.task(bind=True)
+def debug_task(self):
+    print(f'Request: {self.request!r}')

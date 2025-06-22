@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';  // Add Link import
+import { Link } from 'react-router-dom';
+import { PlusCircle } from 'lucide-react';
 import api from '../services/api';
+import PortfolioDialog from '../components/PortfolioDialog';
 
 const Portfolios = () => {
-    const [portfolios, setPortfolios] = useState([]);
+  const [portfolios, setPortfolios] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    description: ''
-  });
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedPortfolio, setSelectedPortfolio] = useState(null);
 
   useEffect(() => {
     fetchPortfolios();
@@ -30,24 +29,32 @@ const Portfolios = () => {
     }
   };
 
-  const handleCreatePortfolio = async (e) => {
-    e.preventDefault();
-    try {
-      await api.portfolios.create(formData);
-      setShowCreateModal(false);
-      setFormData({ name: '', description: '' });
-      fetchPortfolios();
-    } catch (err) {
-      setError('Failed to create portfolio');
-      console.error(err);
+  const handleCreatePortfolio = () => {
+    setSelectedPortfolio(null);
+    setDialogOpen(true);
+  };
+
+  const handleEditPortfolio = (portfolio) => {
+    setSelectedPortfolio(portfolio);
+    setDialogOpen(true);
+  };
+
+  const handleDeletePortfolio = async (id) => {
+    if (window.confirm('Are you sure you want to delete this portfolio?')) {
+      try {
+        await api.portfolios.delete(id);
+        fetchPortfolios();
+      } catch (err) {
+        console.error(err);
+        alert('Failed to delete portfolio');
+      }
     }
   };
 
-  const handleInputChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
+  const handleDialogClose = () => {
+    setDialogOpen(false);
+    setSelectedPortfolio(null);
+    fetchPortfolios();
   };
 
   const formatCurrency = (amount) => {
@@ -55,6 +62,11 @@ const Portfolios = () => {
       style: 'currency',
       currency: 'USD'
     }).format(amount || 0);
+  };
+
+  const formatPercentage = (value) => {
+    if (!value) return '0.00%';
+    return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
   };
 
   if (loading) {
@@ -67,13 +79,14 @@ const Portfolios = () => {
 
   return (
     <div className="max-w-7xl mx-auto p-6">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold text-gray-900">My Portfolios</h1>
         <button
-          onClick={() => setShowCreateModal(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+          onClick={handleCreatePortfolio}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center"
         >
-          Create New Portfolio
+          <PlusCircle className="mr-2 h-5 w-5" />
+          Create Portfolio
         </button>
       </div>
 
@@ -112,88 +125,49 @@ const Portfolios = () => {
                   <span className="text-gray-500">Assets</span>
                   <span className="font-semibold">{portfolio.asset_count || 0}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Transaction</span>
+                <div className="flex justify-between text-sm mt-2">
+                  <span className="text-gray-500">Transactions</span>
                   <span className="font-semibold">{portfolio.transaction_count || 0}</span>
                 </div>
                 <div className="flex justify-between text-sm mt-2">
                   <span className="text-gray-500">Total Value</span>
                   <span className="font-semibold">{formatCurrency(portfolio.total_value)}</span>
                 </div>
+                <div className="flex justify-between text-sm mt-2">
+                  <span className="text-gray-500">Total Gain/Loss</span>
+                  <span className={`font-semibold ${portfolio.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatCurrency(portfolio.total_gain_loss)}
+                    <span className="text-xs ml-1">
+                      ({formatPercentage(portfolio.gain_loss_percentage)})
+                    </span>
+                  </span>
+                </div>
               </div>
 
-              <div className="mt-4 flex space-x-2">
-                <Link
-                  to={`/portfolios/${portfolio.id}`}
-                  className="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm text-center"
+              <div className="mt-4 pt-4 border-t flex justify-between">
+                <button
+                  onClick={() => handleEditPortfolio(portfolio)}
+                  className="text-blue-600 hover:text-blue-800 text-sm font-medium"
                 >
-                  View Details
-                </Link>
-                <Link
-                  to={`/portfolios/${portfolio.id}/assets`}
-                  className="flex-1 bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm text-center"
+                  Edit
+                </button>
+                <button
+                  onClick={() => handleDeletePortfolio(portfolio.id)}
+                  className="text-red-600 hover:text-red-800 text-sm font-medium"
                 >
-                  Manage Assets
-                </Link>
+                  Delete
+                </button>
               </div>
             </div>
           ))}
         </div>
       )}
 
-      {/* Create Portfolio Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-2xl font-bold mb-4">Create New Portfolio</h2>
-            <form onSubmit={handleCreatePortfolio}>
-              <div className="mb-4">
-                <label className="block text-gray-700 text-sm font-bold mb-2">
-                  Portfolio Name
-                </label>
-                <input
-                  type="text"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"
-                  required
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-gray-700 text-sm font-bold mb-2">
-                  Description
-                </label>
-                <textarea
-                  name="description"
-                  value={formData.description}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"
-                  rows="3"
-                />
-              </div>
-              <div className="flex justify-end space-x-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCreateModal(false);
-                    setFormData({ name: '', description: '' });
-                  }}
-                  className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
-                >
-                  Create
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <PortfolioDialog
+        open={dialogOpen}
+        onClose={handleDialogClose}
+        portfolio={selectedPortfolio}
+      />
     </div>
   );
 };
