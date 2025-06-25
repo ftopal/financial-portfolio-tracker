@@ -1,21 +1,22 @@
-from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import ValidationError
-from django.db.models import Sum, Count, Q, F, DecimalField
+from datetime import timedelta
+from decimal import Decimal
+
+from django.db.models import Sum, Count, Q
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from datetime import timedelta
+from rest_framework import viewsets
+from rest_framework.decorators import api_view, action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
 from .models import (
     Portfolio, AssetCategory, Security, Transaction,
-    PriceHistory, RealEstateAsset
+    PriceHistory, CashTransaction, UserPreferences
 )
 from .serializers import (
     PortfolioSerializer, PortfolioDetailSerializer,
     AssetCategorySerializer, SecuritySerializer,
-    TransactionSerializer, HoldingSerializer,
-    PriceHistorySerializer, RealEstateAssetSerializer
+    TransactionSerializer, CashTransactionSerializer, UserPreferencesSerializer
 )
 from .services.security_import_service import SecurityImportService
 
@@ -131,6 +132,76 @@ class PortfolioViewSet(viewsets.ModelViewSet):
 
         return Response(performance_data)
 
+    @action(detail=True, methods=['post'])
+    def deposit_cash(self, request, pk=None):
+        """Deposit cash into portfolio"""
+        portfolio = self.get_object()
+        amount = Decimal(request.data.get('amount', 0))
+        description = request.data.get('description', 'Cash deposit')
+
+        if amount <= 0:
+            return Response({'error': 'Amount must be positive'}, status=400)
+
+        # Create cash transaction
+        cash_transaction = CashTransaction.objects.create(
+            cash_account=portfolio.cash_account,
+            user=request.user,
+            transaction_type='DEPOSIT',
+            amount=amount,
+            description=description,
+            transaction_date=timezone.now()
+        )
+
+        # Update balance
+        portfolio.cash_account.update_balance(amount)
+
+        return Response(CashTransactionSerializer(cash_transaction).data)
+
+    @action(detail=True, methods=['post'])
+    def withdraw_cash(self, request, pk=None):
+        """Withdraw cash from portfolio"""
+        portfolio = self.get_object()
+        amount = Decimal(request.data.get('amount', 0))
+        description = request.data.get('description', 'Cash withdrawal')
+
+        if amount <= 0:
+            return Response({'error': 'Amount must be positive'}, status=400)
+
+        if not portfolio.cash_account.has_sufficient_balance(amount):
+            return Response({'error': 'Insufficient cash balance'}, status=400)
+
+        # Create cash transaction (negative amount for withdrawal)
+        cash_transaction = CashTransaction.objects.create(
+            cash_account=portfolio.cash_account,
+            user=request.user,
+            transaction_type='WITHDRAWAL',
+            amount=-amount,
+            description=description,
+            transaction_date=timezone.now()
+        )
+
+        # Update balance
+        portfolio.cash_account.update_balance(-amount)
+
+        return Response(CashTransactionSerializer(cash_transaction).data)
+
+    @action(detail=True, methods=['get'])
+    def cash_history(self, request, pk=None):
+        """Get cash transaction history for portfolio"""
+        portfolio = self.get_object()
+        transactions = CashTransaction.objects.filter(
+            cash_account=portfolio.cash_account
+        ).order_by('-transaction_date')
+
+        # Pagination
+        page = self.paginate_queryset(transactions)
+        if page is not None:
+            serializer = CashTransactionSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = CashTransactionSerializer(transactions, many=True)
+        return Response(serializer.data)
+
 
 class SecurityViewSet(viewsets.ModelViewSet):
     queryset = Security.objects.all()
@@ -242,13 +313,166 @@ class TransactionViewSet(viewsets.ModelViewSet):
         return queryset.order_by('-transaction_date')
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        """Override to handle cash transactions"""
+        transaction = serializer.save(user=self.request.user)
+
+        # Get user preferences
+        preferences, _ = UserPreferences.objects.get_or_create(user=self.request.user)
+
+        # Handle cash flow based on transaction type
+        cash_account = transaction.portfolio.cash_account
+
+        # Check if cash transaction already exists
+        if hasattr(transaction, 'cash_transaction'):
+            return  # Cash transaction already exists, skip
+
+        if transaction.transaction_type == 'BUY':
+            # Calculate total cost including fees
+            total_cost = transaction.total_value
+
+            # Check cash balance
+            if not cash_account.has_sufficient_balance(total_cost):
+                if preferences.auto_deposit_enabled:
+                    # Calculate deposit amount based on mode
+                    if preferences.auto_deposit_mode == 'EXACT':
+                        deposit_amount = total_cost
+                    else:  # SHORTFALL
+                        deposit_amount = total_cost - cash_account.balance
+
+                    # Create auto-deposit
+                    CashTransaction.objects.create(
+                        cash_account=cash_account,
+                        user=self.request.user,
+                        transaction_type='DEPOSIT',
+                        amount=deposit_amount,
+                        description=f'Auto-deposit for {transaction.security.symbol} purchase',
+                        transaction_date=transaction.transaction_date,
+                        is_auto_deposit=True
+                    )
+                    cash_account.update_balance(deposit_amount)
+
+            # Create buy cash transaction
+            CashTransaction.objects.create(
+                cash_account=cash_account,
+                user=self.request.user,
+                transaction_type='BUY',
+                amount=-total_cost,
+                description=f'Bought {transaction.quantity} {transaction.security.symbol}',
+                transaction_date=transaction.transaction_date,
+                related_transaction=transaction
+            )
+            cash_account.update_balance(-total_cost)
+
+        elif transaction.transaction_type == 'SELL':
+            # Calculate proceeds after fees
+            proceeds = transaction.total_value
+
+            # Create sell cash transaction
+            CashTransaction.objects.create(
+                cash_account=cash_account,
+                user=self.request.user,
+                transaction_type='SELL',
+                amount=proceeds,
+                description=f'Sold {transaction.quantity} {transaction.security.symbol}',
+                transaction_date=transaction.transaction_date,
+                related_transaction=transaction
+            )
+            cash_account.update_balance(proceeds)
+
+        elif transaction.transaction_type == 'DIVIDEND':
+            # Create dividend cash transaction
+            dividend_amount = transaction.total_value
+
+            CashTransaction.objects.create(
+                cash_account=cash_account,
+                user=self.request.user,
+                transaction_type='DIVIDEND',
+                amount=dividend_amount,
+                description=f'Dividend from {transaction.security.symbol}',
+                transaction_date=transaction.transaction_date,
+                related_transaction=transaction
+            )
+            cash_account.update_balance(dividend_amount)
 
 
 class AssetCategoryViewSet(viewsets.ModelViewSet):
     queryset = AssetCategory.objects.all()
     serializer_class = AssetCategorySerializer
     permission_classes = [IsAuthenticated]
+
+
+class CashTransactionViewSet(viewsets.ModelViewSet):
+    """ViewSet for cash transactions"""
+    serializer_class = CashTransactionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = CashTransaction.objects.filter(user=self.request.user) \
+            .select_related('cash_account__portfolio', 'related_transaction')
+
+        # Filter by portfolio
+        portfolio_id = self.request.query_params.get('portfolio_id')
+        if portfolio_id:
+            queryset = queryset.filter(cash_account__portfolio_id=portfolio_id)
+
+        # Filter by transaction type
+        transaction_type = self.request.query_params.get('type')
+        if transaction_type:
+            queryset = queryset.filter(transaction_type=transaction_type)
+
+        # Date filtering
+        start_date = self.request.query_params.get('start_date')
+        if start_date:
+            queryset = queryset.filter(transaction_date__gte=start_date)
+
+        end_date = self.request.query_params.get('end_date')
+        if end_date:
+            queryset = queryset.filter(transaction_date__lte=end_date)
+
+        return queryset.order_by('-transaction_date')
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class UserPreferencesViewSet(viewsets.ModelViewSet):
+    """ViewSet for user preferences"""
+    serializer_class = UserPreferencesSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return UserPreferences.objects.filter(user=self.request.user)
+
+    def get_object(self):
+        """Get or create user preferences"""
+        obj, created = UserPreferences.objects.get_or_create(
+            user=self.request.user,
+            defaults={
+                'auto_deposit_enabled': True,
+                'auto_deposit_mode': 'EXACT',
+                'show_cash_warnings': True,
+                'default_currency': 'USD'
+            }
+        )
+        return obj
+
+    def perform_create(self, serializer):
+        """Ensure user is set when creating preferences"""
+        serializer.save(user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        """Override create to handle get_or_create logic"""
+        # Check if preferences already exist
+        existing = UserPreferences.objects.filter(user=request.user).first()
+        if existing:
+            # Update existing preferences
+            serializer = self.get_serializer(existing, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+            return Response(serializer.data)
+        else:
+            # Create new preferences
+            return super().create(request, *args, **kwargs)
 
 
 @api_view(['GET'])
@@ -360,12 +584,12 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 'avg_cost_price': float(data['avg_cost']),
                 'current_price': float(data['security'].current_price),
                 'total_current_value': float(data['current_value']),
-                'total_cost': float(data['quantity'] * data['avg_cost']),
+                'total_cost': float(data.get('net_cash_invested', data['quantity'] * data['avg_cost'])),
                 'total_gain_loss': float(data['unrealized_gains']),
                 'total_dividends': float(data['total_dividends']),
                 'gain_loss_percentage': float(
-                    (data['unrealized_gains'] / (data['quantity'] * data['avg_cost']) * 100)
-                    if data['quantity'] > 0 and data['avg_cost'] > 0 else 0
+                    (data['unrealized_gains'] / (data.get('net_cash_invested', data['quantity'] * data['avg_cost'])) * 100)
+                    if data.get('net_cash_invested', data['quantity'] * data['avg_cost']) > 0 else 0
                 ),
                 'transactions': sorted(transactions, key=lambda x: x['transaction_date'], reverse=True)
             }
@@ -374,10 +598,25 @@ def portfolio_holdings_consolidated(request, portfolio_id):
     # Sort by total value descending
     consolidated_assets.sort(key=lambda x: x['total_current_value'], reverse=True)
 
-    # Calculate summary
+    # Get cash account info
+    cash_info = None
+    if hasattr(portfolio, 'cash_account'):
+        cash_info = {
+            'balance': float(portfolio.cash_account.balance),
+            'currency': portfolio.cash_account.currency,
+            'last_updated': portfolio.cash_account.updated_at
+        }
+
+    # Calculate summary including cash
+    securities_value = sum(item['total_current_value'] for item in consolidated_assets)
+    securities_cost = sum(item['total_cost'] for item in consolidated_assets)
+    cash_balance = cash_info['balance'] if cash_info else 0
+
     summary = {
-        'total_value': sum(item['total_current_value'] for item in consolidated_assets),
-        'total_cost': sum(item['total_cost'] for item in consolidated_assets),
+        'total_value': securities_value + cash_balance,  # Include cash in total value
+        'securities_value': securities_value,
+        'cash_balance': cash_balance,
+        'total_cost': securities_cost,
         'total_gain_loss': sum(item['total_gain_loss'] for item in consolidated_assets),
         'total_dividends': sum(item['total_dividends'] for item in consolidated_assets),
         'unique_assets': len(consolidated_assets),
@@ -387,5 +626,6 @@ def portfolio_holdings_consolidated(request, portfolio_id):
     return Response({
         'portfolio': PortfolioSerializer(portfolio).data,
         'consolidated_assets': consolidated_assets,
+        'cash_account': cash_info,
         'summary': summary
     })

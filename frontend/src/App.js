@@ -10,6 +10,7 @@ import Assets from './pages/Assets';
 import GroupedAssets from './pages/GroupedAssets';
 import Portfolios from './pages/Portfolios';
 import ConsolidatedPortfolioDetails from './pages/ConsolidatedPortfolioDetails';
+import Settings from './pages/Settings';
 
 // Create a helper component for protected routes
 const ProtectedRoute = ({ children }) => {
@@ -101,6 +102,7 @@ function App() {
           }
           />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/preferences" element={<Settings />} />
         </Routes>
       </Router>
     </ThemeProvider>

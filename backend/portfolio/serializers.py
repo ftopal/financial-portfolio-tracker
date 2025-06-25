@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     Portfolio, AssetCategory, Security, Transaction,
-    PriceHistory, RealEstateAsset, User
+    PriceHistory, RealEstateAsset, User, PortfolioCashAccount, CashTransaction, UserPreferences
 )
 from decimal import Decimal
 
@@ -88,6 +88,8 @@ class PortfolioSerializer(serializers.ModelSerializer):
     transaction_count = serializers.SerializerMethodField()
     total_gain_loss = serializers.SerializerMethodField()
     gain_loss_percentage = serializers.SerializerMethodField()
+    cash_balance = serializers.SerializerMethodField()  # New field
+    total_value_with_cash = serializers.SerializerMethodField()  # New field
 
     class Meta:
         model = Portfolio
@@ -95,9 +97,20 @@ class PortfolioSerializer(serializers.ModelSerializer):
             'id', 'name', 'description', 'is_default', 'currency',
             'created_at', 'updated_at', 'total_value', 'total_cost',
             'total_gains', 'holdings_count', 'asset_count', 'transaction_count',
-            'total_gain_loss', 'gain_loss_percentage'
+            'total_gain_loss', 'gain_loss_percentage', 'cash_balance',
+            'total_value_with_cash'
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
+
+    def get_cash_balance(self, obj):
+        """Get current cash balance"""
+        if hasattr(obj, 'cash_account'):
+            return float(obj.cash_account.balance)
+        return 0.0
+
+    def get_total_value_with_cash(self, obj):
+        """Get total portfolio value including cash"""
+        return float(obj.get_total_value())
 
     def get_total_value(self, obj):
         summary = obj.get_summary()
@@ -139,14 +152,26 @@ class PortfolioSerializer(serializers.ModelSerializer):
         summary = obj.get_summary()
         return float(summary['total_return_pct'])
 
+class PortfolioCashAccountSerializer(serializers.ModelSerializer):
+    portfolio_name = serializers.ReadOnlyField(source='portfolio.name')
+
+    class Meta:
+        model = PortfolioCashAccount
+        fields = [
+            'id', 'portfolio', 'portfolio_name', 'balance', 'currency',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
 
 class PortfolioDetailSerializer(PortfolioSerializer):
     """Detailed portfolio serializer with holdings"""
     holdings = serializers.SerializerMethodField()
     summary = serializers.SerializerMethodField()
+    cash_account = PortfolioCashAccountSerializer(read_only=True)
 
     class Meta(PortfolioSerializer.Meta):
-        fields = PortfolioSerializer.Meta.fields + ['holdings', 'summary']
+        fields = PortfolioSerializer.Meta.fields + ['holdings', 'summary', 'cash_account']
 
     def get_holdings(self, obj):
         holdings = obj.get_holdings()
@@ -197,4 +222,45 @@ class RealEstateAssetSerializer(serializers.ModelSerializer):
     class Meta:
         model = RealEstateAsset
         fields = '__all__'
+        read_only_fields = ['user', 'created_at', 'updated_at']
+
+
+class CashTransactionSerializer(serializers.ModelSerializer):
+    portfolio_name = serializers.ReadOnlyField(source='cash_account.portfolio.name')
+
+    class Meta:
+        model = CashTransaction
+        fields = [
+            'id', 'cash_account', 'portfolio_name', 'transaction_type',
+            'amount', 'balance_after', 'description', 'transaction_date',
+            'is_auto_deposit', 'related_transaction', 'created_at'
+        ]
+        read_only_fields = ['user', 'balance_after', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        # Auto-set user from request
+        validated_data['user'] = self.context['request'].user
+
+        # Update cash account balance
+        cash_account = validated_data['cash_account']
+        amount = validated_data['amount']
+
+        # Update balance
+        cash_account.update_balance(amount)
+
+        # Set balance_after
+        validated_data['balance_after'] = cash_account.balance
+
+        return super().create(validated_data)
+
+
+class UserPreferencesSerializer(serializers.ModelSerializer):
+    username = serializers.ReadOnlyField(source='user.username')
+
+    class Meta:
+        model = UserPreferences
+        fields = [
+            'id', 'username', 'auto_deposit_enabled', 'auto_deposit_mode',
+            'show_cash_warnings', 'default_currency', 'created_at', 'updated_at'
+        ]
         read_only_fields = ['user', 'created_at', 'updated_at']

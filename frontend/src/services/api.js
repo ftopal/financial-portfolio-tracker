@@ -1,3 +1,5 @@
+// Update your frontend/src/services/api.js file
+
 import axios from 'axios';
 
 // Base URL for the API
@@ -79,38 +81,80 @@ export const authAPI = {
 export const portfolioAPI = {
   getAll: () => API.get('portfolios/'),
   get: (id) => API.get(`portfolios/${id}/`),
-  getConsolidatedView: (portfolioId) => API.get(`portfolios/${portfolioId}/holdings-consolidated/`),
+  getConsolidatedView: (portfolioId) => API.get(`portfolios/${portfolioId}/consolidated/`),
   create: (data) => API.post('portfolios/', data),
   update: (id, data) => API.put(`portfolios/${id}/`, data),
   delete: (id) => API.delete(`portfolios/${id}/`),
   getSummary: (portfolioId = null) => {
     const url = portfolioId ? `summary/?portfolio_id=${portfolioId}` : 'summary/';
     return API.get(url);
-  }
+  },
+
+  // New cash-related endpoints
+  depositCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/deposit_cash/`, data),
+  withdrawCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/withdraw_cash/`, data),
+  getCashHistory: (portfolioId) => API.get(`portfolios/${portfolioId}/cash_history/`)
 };
 
-// Asset services
-export const assetAPI = {
+// Cash Transaction services (NEW)
+export const cashAPI = {
   getAll: (filters = {}) => {
     const params = new URLSearchParams();
     if (filters.portfolio_id) params.append('portfolio_id', filters.portfolio_id);
-    if (filters.asset_type) params.append('asset_type', filters.asset_type);
+    if (filters.type) params.append('type', filters.type);
+    if (filters.start_date) params.append('start_date', filters.start_date);
+    if (filters.end_date) params.append('end_date', filters.end_date);
 
-    return API.get(`assets/?${params.toString()}`);
+    return API.get(`cash-transactions/?${params.toString()}`);
   },
-  get: (id) => API.get(`assets/${id}/`),
-  create: (data) => API.post('assets/', data),
-  update: (id, data) => API.put(`assets/${id}/`, data),
-  delete: (id) => API.delete(`assets/${id}/`),
-  updatePrice: (id, price) => API.post(`assets/${id}/update_price/`, { price }),
-  getGrouped: () => API.get('assets/grouped/')
+  get: (id) => API.get(`cash-transactions/${id}/`),
+  create: (data) => API.post('cash-transactions/', data),
+  update: (id, data) => API.put(`cash-transactions/${id}/`, data),
+  delete: (id) => API.delete(`cash-transactions/${id}/`)
+};
+
+// User Preferences services (NEW)
+export const preferencesAPI = {
+  get: () => API.get('preferences/'),
+  update: async (data) => {
+    try {
+      // First try to get existing preferences
+      const response = await API.get('preferences/');
+
+      if (response.data.results && response.data.results.length > 0) {
+        // Update existing preferences
+        const id = response.data.results[0].id;
+        return API.patch(`preferences/${id}/`, data);
+      } else {
+        // Create new preferences - the backend will handle user assignment
+        return API.post('preferences/', data);
+      }
+    } catch (error) {
+      // If GET fails, try to create new preferences
+      if (error.response && error.response.status === 404) {
+        return API.post('preferences/', data);
+      }
+      throw error;
+    }
+  }
+};
+
+// Security services
+export const securityAPI = {
+  search: (query) => API.get(`securities/search/?q=${query}`),
+  import: (symbol) => API.post('securities/import_security/', { symbol }),
+  get: (id) => API.get(`securities/${id}/`),
+  getAll: () => API.get('securities/'),
+  updatePrice: (id, price) => API.post(`securities/${id}/update_price/`, { price })
 };
 
 // Transaction services
 export const transactionAPI = {
   getAll: (filters = {}) => {
     const params = new URLSearchParams();
-    if (filters.asset_id) params.append('asset', filters.asset_id);
+    if (filters.portfolio_id) params.append('portfolio_id', filters.portfolio_id);
+    if (filters.security_id) params.append('security_id', filters.security_id);
+    if (filters.type) params.append('type', filters.type);
     if (filters.start_date) params.append('start_date', filters.start_date);
     if (filters.end_date) params.append('end_date', filters.end_date);
 
@@ -131,50 +175,15 @@ export const categoryAPI = {
   delete: (id) => API.delete(`categories/${id}/`)
 };
 
-// Stock services
-export const securityAPI = {
-  search: (query) => API.get(`securities/search/?q=${query}`),
-  import: (symbol) => API.post('securities/import_security/', { symbol }),
-  get: (id) => API.get(`securities/${id}/`),
-  getAll: () => API.get('securities/'),
-};
-
-// Helper function to handle errors
-export const handleAPIError = (error) => {
-  if (error.response) {
-    // Server responded with error
-    const message = error.response.data.detail ||
-                   error.response.data.message ||
-                   'An error occurred';
-    return {
-      message,
-      status: error.response.status,
-      data: error.response.data
-    };
-  } else if (error.request) {
-    // Request made but no response
-    return {
-      message: 'No response from server. Please check your connection.',
-      status: 0
-    };
-  } else {
-    // Something else happened
-    return {
-      message: error.message || 'An unexpected error occurred',
-      status: 0
-    };
-  }
-};
-
-// Export everything as default
-const api = {
-    auth: authAPI,
-    portfolios: portfolioAPI,
-    assets: assetAPI,
-    transactions: transactionAPI,
-    categories: categoryAPI,
-    securities: securityAPI,
-    handleError: handleAPIError
+// Consolidated API export
+export const api = {
+  auth: authAPI,
+  portfolios: portfolioAPI,
+  securities: securityAPI,
+  transactions: transactionAPI,
+  categories: categoryAPI,
+  cash: cashAPI,
+  preferences: preferencesAPI
 };
 
 export default api;

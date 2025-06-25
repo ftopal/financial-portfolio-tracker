@@ -21,10 +21,9 @@ import {
   Category as CategoryIcon,
   SwapHoriz as TransactionsIcon,
   Logout as LogoutIcon,
-  Folder as FolderIcon,  // Add this import
+  Folder as FolderIcon,
+  Settings as SettingsIcon,  // Add this import
 } from '@mui/icons-material';
-
-// Rest of your Navigation component...
 
 const Navigation = () => {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
@@ -46,13 +45,13 @@ const Navigation = () => {
   };
 
   const menuItems = [
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
-  { text: 'Portfolios', icon: <FolderIcon />, path: '/portfolios' },
-  { text: 'Assets', icon: <AssetsIcon />, path: '/assets' },
-  { text: 'Grouped Assets', icon: <AssetsIcon />, path: '/assets/grouped' },
-  { text: 'Categories', icon: <CategoryIcon />, path: '/categories' },
-  { text: 'Transactions', icon: <TransactionsIcon />, path: '/transactions' },
-];
+    { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+    { text: 'Portfolios', icon: <FolderIcon />, path: '/portfolios' },
+    { text: 'Assets', icon: <AssetsIcon />, path: '/assets' },
+    { text: 'Grouped Assets', icon: <AssetsIcon />, path: '/assets/grouped' },
+    { text: 'Categories', icon: <CategoryIcon />, path: '/categories' },
+    { text: 'Transactions', icon: <TransactionsIcon />, path: '/transactions' },
+  ];
 
   return (
     <>
@@ -69,6 +68,17 @@ const Navigation = () => {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Financial Portfolio Tracker
           </Typography>
+
+          {/* Add Settings icon button in the AppBar */}
+          <IconButton
+            color="inherit"
+            component={Link}
+            to="/preferences"
+            sx={{ mr: 1 }}
+          >
+            <SettingsIcon />
+          </IconButton>
+
           <Button color="inherit" onClick={handleLogout}>
             Logout
           </Button>
@@ -97,6 +107,16 @@ const Navigation = () => {
           </List>
           <Divider />
           <List>
+            {/* Add Settings in the drawer menu */}
+            <ListItem
+              button
+              component={Link}
+              to="/preferences"
+            >
+              <ListItemIcon><SettingsIcon /></ListItemIcon>
+              <ListItemText primary="Settings" />
+            </ListItem>
+
             <ListItem button onClick={handleLogout}>
               <ListItemIcon><LogoutIcon /></ListItemIcon>
               <ListItemText primary="Logout" />

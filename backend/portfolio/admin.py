@@ -67,3 +67,74 @@ class RealEstateAssetAdmin(admin.ModelAdmin):
     list_filter = ['property_type', 'city', 'country']
     search_fields = ['name', 'address', 'city']
     readonly_fields = ['unrealized_gain', 'unrealized_gain_pct', 'created_at', 'updated_at']
+
+
+# Add these to your backend/portfolio/admin.py file
+
+@admin.register(PortfolioCashAccount)
+class PortfolioCashAccountAdmin(admin.ModelAdmin):
+    list_display = ['portfolio', 'balance', 'currency', 'updated_at']
+    list_filter = ['currency', 'created_at']
+    search_fields = ['portfolio__name', 'portfolio__user__username']
+    readonly_fields = ['created_at', 'updated_at']
+
+    fieldsets = (
+        ('Account Information', {
+            'fields': ('portfolio', 'currency', 'balance')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(CashTransaction)
+class CashTransactionAdmin(admin.ModelAdmin):
+    list_display = ['cash_account', 'transaction_type', 'amount', 'balance_after',
+                    'transaction_date', 'is_auto_deposit']
+    list_filter = ['transaction_type', 'is_auto_deposit', 'transaction_date']
+    search_fields = ['cash_account__portfolio__name', 'description', 'user__username']
+    date_hierarchy = 'transaction_date'
+    readonly_fields = ['balance_after', 'created_at', 'updated_at']
+
+    fieldsets = (
+        ('Transaction Information', {
+            'fields': ('cash_account', 'user', 'transaction_type', 'transaction_date')
+        }),
+        ('Financial Details', {
+            'fields': ('amount', 'balance_after', 'description')
+        }),
+        ('Related Information', {
+            'fields': ('related_transaction', 'is_auto_deposit')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(UserPreferences)
+class UserPreferencesAdmin(admin.ModelAdmin):
+    list_display = ['user', 'auto_deposit_enabled', 'auto_deposit_mode',
+                    'show_cash_warnings', 'default_currency']
+    list_filter = ['auto_deposit_enabled', 'auto_deposit_mode', 'default_currency']
+    search_fields = ['user__username', 'user__email']
+    readonly_fields = ['created_at', 'updated_at']
+
+    fieldsets = (
+        ('User', {
+            'fields': ('user',)
+        }),
+        ('Cash Management', {
+            'fields': ('auto_deposit_enabled', 'auto_deposit_mode', 'show_cash_warnings')
+        }),
+        ('Display Preferences', {
+            'fields': ('default_currency',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )

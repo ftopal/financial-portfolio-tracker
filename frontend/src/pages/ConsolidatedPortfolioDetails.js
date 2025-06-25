@@ -1,32 +1,22 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, Trash2 } from 'lucide-react';
 import api from '../services/api';
 import StockAutocomplete from '../components/StockAutocomplete';
+import CashManagement from '../components/CashManagement';
+import TransactionForm from '../components/TransactionForm';
 
 const ConsolidatedPortfolioDetails = () => {
   const { portfolioId } = useParams();
   const [portfolio, setPortfolio] = useState(null);
   const [consolidatedAssets, setConsolidatedAssets] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [cashAccount, setCashAccount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expandedRows, setExpandedRows] = useState({});
   const [selectedSecurity, setSelectedSecurity] = useState(null);
-
-  // Add new state for transaction modal
-  const [showAddNewTransactionModal, setShowAddNewTransactionModal] = useState(false);
-  const [newTransactionForm, setNewTransactionForm] = useState({
-    security_id: null,
-    transaction_type: 'BUY',
-    quantity: '',
-    price: '',
-    transaction_date: new Date().toISOString().split('T')[0], // Default to today
-    fees: '0',
-    notes: '',
-    dividend_per_share: '' // Add this field for dividends
-  });
+  const [showTransactionForm, setShowTransactionForm] = useState(false);
 
   const fetchConsolidatedData = useCallback(async () => {
     try {
@@ -36,6 +26,7 @@ const ConsolidatedPortfolioDetails = () => {
       setPortfolio(response.data.portfolio || {});
       setConsolidatedAssets(response.data.consolidated_assets || []);
       setSummary(response.data.summary || {});
+      setCashAccount(response.data.cash_account || null);
       setError('');
     } catch (err) {
       console.error('Error fetching consolidated data:', err);
@@ -57,7 +48,7 @@ const ConsolidatedPortfolioDetails = () => {
     }));
   };
 
-  // New function to handle Add Transaction from expanded row
+  // Function to handle Add Transaction from expanded row
   const handleAddTransactionForSecurity = (asset) => {
     // Get the first transaction to extract security ID
     const firstTransaction = asset.transactions && asset.transactions.length > 0
@@ -71,22 +62,10 @@ const ConsolidatedPortfolioDetails = () => {
       name: asset.name,
       current_price: asset.current_price,
       security_type: asset.asset_type,
-      total_quantity: asset.total_quantity // Add total quantity to selected security
+      total_quantity: asset.total_quantity
     });
 
-    // Pre-fill the form with security information
-    setNewTransactionForm({
-      security_id: firstTransaction ? firstTransaction.stock_id : null,
-      transaction_type: 'BUY',
-      quantity: '',
-      price: asset.current_price ? asset.current_price.toString() : '',
-      transaction_date: new Date().toISOString().split('T')[0],
-      fees: '0',
-      notes: '',
-      dividend_per_share: ''
-    });
-
-    setShowAddNewTransactionModal(true);
+    setShowTransactionForm(true);
   };
 
   // Function to handle transaction deletion
@@ -103,101 +82,17 @@ const ConsolidatedPortfolioDetails = () => {
     }
   };
 
-  // Updated function to handle opening modal for new transaction
+  // Function to handle opening modal for new transaction
   const handleOpenNewTransactionModal = () => {
-    // Reset selected security when opening from main button
     setSelectedSecurity(null);
-    setNewTransactionForm({
-      security_id: null,
-      transaction_type: 'BUY',
-      quantity: '',
-      price: '',
-      transaction_date: new Date().toISOString().split('T')[0],
-      fees: '0',
-      notes: '',
-      dividend_per_share: ''
-    });
-    setShowAddNewTransactionModal(true);
+    setShowTransactionForm(true);
   };
 
-  const handleNewTransactionSubmit = async (e) => {
-    e.preventDefault();
-
-    try {
-      let transactionData = {
-        portfolio: portfolioId,
-        security: newTransactionForm.security_id,
-        transaction_type: newTransactionForm.transaction_type,
-        transaction_date: newTransactionForm.transaction_date,
-        quantity: parseFloat(newTransactionForm.quantity),
-        fees: parseFloat(newTransactionForm.fees) || 0,
-        notes: newTransactionForm.notes || ''
-      };
-
-      // Handle dividend transactions differently
-      if (newTransactionForm.transaction_type === 'DIVIDEND') {
-        const totalDividend = parseFloat(newTransactionForm.price);
-        const quantity = parseFloat(newTransactionForm.quantity);
-
-        // Calculate dividend per share from total amount
-        let dividendPerShare = quantity > 0 ? totalDividend / quantity : 0;
-
-        // Round to 4 decimal places to match backend field constraints
-        dividendPerShare = Math.round(dividendPerShare * 10000) / 10000;
-
-        // Ensure it doesn't exceed max digits (10 total, 4 decimal = max 999999.9999)
-        if (dividendPerShare > 999999.9999) {
-          alert('Dividend per share exceeds maximum allowed value. Please check your input.');
-          return;
-        }
-
-        transactionData.dividend_per_share = dividendPerShare;
-        // For dividends, the 'price' field should be the dividend per share
-        transactionData.price = dividendPerShare;
-      } else {
-        // For BUY/SELL transactions, price is price per share
-        transactionData.price = parseFloat(newTransactionForm.price);
-      }
-
-      console.log('Sending transaction data:', transactionData); // Debug log
-
-      await api.transactions.create(transactionData);
-
-      // Close modal and refresh data
-      setShowAddNewTransactionModal(false);
-      setSelectedSecurity(null);
-      setNewTransactionForm({
-        security_id: null,
-        transaction_type: 'BUY',
-        quantity: '',
-        price: '',
-        transaction_date: new Date().toISOString().split('T')[0],
-        fees: '0',
-        notes: '',
-        dividend_per_share: ''
-      });
-      fetchConsolidatedData(); // Refresh the data
-
-    } catch (err) {
-      console.error('Error adding transaction:', err);
-      console.error('Response data:', err.response?.data);
-
-      // Extract error message
-      let errorMessage = 'Failed to add transaction';
-      if (err.response?.data) {
-        if (err.response.data.dividend_per_share) {
-          errorMessage = err.response.data.dividend_per_share[0];
-        } else if (err.response.data.detail) {
-          errorMessage = err.response.data.detail;
-        } else if (err.response.data.error) {
-          errorMessage = err.response.data.error;
-        } else if (typeof err.response.data === 'string') {
-          errorMessage = err.response.data;
-        }
-      }
-
-      alert(errorMessage);
-    }
+  // Function to handle transaction success
+  const handleTransactionSuccess = () => {
+    setShowTransactionForm(false);
+    setSelectedSecurity(null);
+    fetchConsolidatedData(); // Refresh the data
   };
 
   const formatCurrency = (amount) => {
@@ -257,21 +152,33 @@ const ConsolidatedPortfolioDetails = () => {
         )}
       </div>
 
-      {/* Summary Cards */}
+      {/* Summary Cards - Updated to include cash */}
       {summary && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
           <div className="bg-white p-6 rounded-lg shadow">
             <h3 className="text-sm font-medium text-gray-500 mb-2">Total Value</h3>
             <p className="text-2xl font-bold text-gray-900">
               {formatCurrency(summary.total_value)}
             </p>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-2">Total Cost</h3>
-            <p className="text-2xl font-bold text-gray-900">
-              {formatCurrency(summary.total_cost)}
+            <p className="text-xs text-gray-500 mt-1">
+              Securities + Cash
             </p>
           </div>
+
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-sm font-medium text-gray-500 mb-2">Securities Value</h3>
+            <p className="text-2xl font-bold text-gray-900">
+              {formatCurrency(summary.securities_value || summary.total_value)}
+            </p>
+          </div>
+
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-sm font-medium text-gray-500 mb-2">Cash Balance</h3>
+            <p className="text-2xl font-bold text-gray-900">
+              {formatCurrency(summary.cash_balance || 0)}
+            </p>
+          </div>
+
           <div className="bg-white p-6 rounded-lg shadow">
             <h3 className="text-sm font-medium text-gray-500 mb-2">Total Gain/Loss</h3>
             <p className={`text-2xl font-bold ${summary.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -281,12 +188,25 @@ const ConsolidatedPortfolioDetails = () => {
               {formatPercentage((summary.total_gain_loss / summary.total_cost) * 100)}
             </p>
           </div>
+
           <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-2">Unique Assets</h3>
+            <h3 className="text-sm font-medium text-gray-500 mb-2">Total Dividends</h3>
             <p className="text-2xl font-bold text-gray-900">
-              {summary.unique_assets}
+              {formatCurrency(summary.total_dividends || 0)}
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Cash Management Section */}
+      {cashAccount && (
+        <div className="mb-8">
+          <CashManagement
+            portfolioId={portfolioId}
+            cashBalance={cashAccount.balance}
+            currency={cashAccount.currency}
+            onBalanceUpdate={fetchConsolidatedData}
+          />
         </div>
       )}
 
@@ -294,7 +214,7 @@ const ConsolidatedPortfolioDetails = () => {
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-200">
           <h2 className="text-xl font-bold text-gray-900">
-            Consolidated Holdings
+            Securities Holdings
           </h2>
           <p className="text-sm text-gray-500 mt-1">
             Click on any row to see individual transactions
@@ -303,7 +223,8 @@ const ConsolidatedPortfolioDetails = () => {
 
         {consolidatedAssets.length === 0 ? (
           <div className="px-6 py-12 text-center">
-            <p className="text-gray-500">No assets in this portfolio yet.</p>
+            <p className="text-gray-500">No securities in this portfolio yet.</p>
+            <p className="text-gray-500 mt-2">Add securities to start tracking your investments.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -493,250 +414,17 @@ const ConsolidatedPortfolioDetails = () => {
         </button>
       </div>
 
-      {/* Add New Transaction Modal */}
-      {showAddNewTransactionModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md my-8">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">
-              Add New Transaction
-            </h3>
-
-            <form onSubmit={handleNewTransactionSubmit}>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Security *
-                  </label>
-                  {selectedSecurity ? (
-                    // Show pre-selected security info
-                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-medium text-gray-900">{selectedSecurity.symbol} - {selectedSecurity.name}</p>
-                          <p className="text-sm text-gray-600">{selectedSecurity.security_type}</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedSecurity(null);
-                            setNewTransactionForm({
-                              ...newTransactionForm,
-                              security_id: null,
-                              price: '',
-                              dividend_per_share: ''
-                            });
-                          }}
-                          className="text-sm text-blue-600 hover:text-blue-800"
-                        >
-                          Change
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    // Show autocomplete for selecting security
-                    <StockAutocomplete
-                      onSelectStock={(security) => {
-                        // Try to find if we already have this security in our portfolio
-                        const existingAsset = consolidatedAssets.find(
-                          asset => asset.symbol === security.symbol
-                        );
-
-                        const securityWithQuantity = {
-                          ...security,
-                          total_quantity: existingAsset ? existingAsset.total_quantity : 0
-                        };
-
-                        setSelectedSecurity(securityWithQuantity);
-                        setNewTransactionForm({
-                          ...newTransactionForm,
-                          security_id: security.id,
-                          price: security.current_price ? security.current_price.toString() : '',
-                          dividend_per_share: '',
-                          // Auto-fill quantity if it's a dividend transaction
-                          quantity: newTransactionForm.transaction_type === 'DIVIDEND' && existingAsset
-                            ? existingAsset.total_quantity.toString()
-                            : newTransactionForm.quantity
-                        });
-                      }}
-                    />
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Transaction Type *
-                  </label>
-                  <select
-                    value={newTransactionForm.transaction_type}
-                    onChange={(e) => {
-                      const newType = e.target.value;
-                      setNewTransactionForm({
-                        ...newTransactionForm,
-                        transaction_type: newType,
-                        // Auto-fill quantity for dividends if we have a selected security
-                        quantity: newType === 'DIVIDEND' && selectedSecurity?.total_quantity
-                          ? selectedSecurity.total_quantity.toString()
-                          : newTransactionForm.quantity
-                      });
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  >
-                    <option value="BUY">Buy</option>
-                    <option value="SELL">Sell</option>
-                    <option value="DIVIDEND">Dividend</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Quantity *
-                  </label>
-                  <input
-                    type="number"
-                    step="0.00000001"
-                    required
-                    value={newTransactionForm.quantity}
-                    onChange={(e) => setNewTransactionForm({
-                      ...newTransactionForm,
-                      quantity: e.target.value
-                    })}
-                    placeholder={newTransactionForm.transaction_type === 'DIVIDEND' ? "Number of shares owned" : "Number of shares"}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  {newTransactionForm.transaction_type === 'DIVIDEND' && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      {selectedSecurity?.total_quantity > 0
-                        ? `Auto-filled with your current holding of ${selectedSecurity.total_quantity} shares`
-                        : "Enter the number of shares you own"}
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {newTransactionForm.transaction_type === 'DIVIDEND' ? 'Total Dividend Amount *' : 'Price per Share/Unit *'}
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    required
-                    value={newTransactionForm.price}
-                    onChange={(e) => setNewTransactionForm({
-                      ...newTransactionForm,
-                      price: e.target.value
-                    })}
-                    placeholder={newTransactionForm.transaction_type === 'DIVIDEND' ? "Total dividend received" : "Price per share"}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  {newTransactionForm.transaction_type === 'DIVIDEND' && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Enter the total dividend amount you received
-                      {newTransactionForm.quantity && newTransactionForm.price && (
-                        (() => {
-                          const perShare = parseFloat(newTransactionForm.price) / parseFloat(newTransactionForm.quantity);
-                          const roundedPerShare = Math.round(perShare * 10000) / 10000;
-
-                          if (roundedPerShare > 999999.9999) {
-                            return (
-                              <span className="block text-red-600 mt-1">
-                                ⚠️ Dividend per share too large. Please check your values.
-                              </span>
-                            );
-                          }
-
-                          return (
-                            <span className="block text-blue-600 mt-1">
-                              = ${roundedPerShare.toFixed(4)} per share
-                            </span>
-                          );
-                        })()
-                      )}
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Transaction Date *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={newTransactionForm.transaction_date}
-                    onChange={(e) => setNewTransactionForm({
-                      ...newTransactionForm,
-                      transaction_date: e.target.value
-                    })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Fees
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={newTransactionForm.fees}
-                    onChange={(e) => setNewTransactionForm({
-                      ...newTransactionForm,
-                      fees: e.target.value
-                    })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Notes
-                  </label>
-                  <textarea
-                    rows="3"
-                    value={newTransactionForm.notes}
-                    onChange={(e) => setNewTransactionForm({
-                      ...newTransactionForm,
-                      notes: e.target.value
-                    })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end space-x-3 mt-6">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddNewTransactionModal(false);
-                    setSelectedSecurity(null);
-                    setNewTransactionForm({
-                      security_id: null,
-                      transaction_type: 'BUY',
-                      quantity: '',
-                      price: '',
-                      transaction_date: new Date().toISOString().split('T')[0],
-                      fees: '0',
-                      notes: '',
-                      dividend_per_share: ''
-                    });
-                  }}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={!newTransactionForm.security_id || !newTransactionForm.quantity || !newTransactionForm.price}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md disabled:bg-gray-400 disabled:cursor-not-allowed"
-                >
-                  Add Transaction
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Use TransactionForm instead of inline modal */}
+      <TransactionForm
+        open={showTransactionForm}
+        onClose={() => {
+          setShowTransactionForm(false);
+          setSelectedSecurity(null);
+        }}
+        portfolioId={portfolioId}
+        security={selectedSecurity}
+        onSuccess={handleTransactionSuccess}
+      />
     </div>
   );
 };

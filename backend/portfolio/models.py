@@ -24,14 +24,26 @@ class Portfolio(models.Model):
         return f"{self.name} ({self.user.username})"
 
     def save(self, *args, **kwargs):
+        """Override save to create cash account automatically"""
+        is_new = self.pk is None
+
         # Ensure only one default portfolio per user
         if self.is_default:
             Portfolio.objects.filter(user=self.user, is_default=True).update(is_default=False)
+
         super().save(*args, **kwargs)
+
+        # Create cash account for new portfolios
+        if is_new:
+            PortfolioCashAccount.objects.create(
+                portfolio=self,
+                currency=self.currency
+            )
 
     def get_holdings(self):
         """Calculate current holdings from transactions"""
         from django.db.models import Sum, F, Q, DecimalField
+        from decimal import Decimal
 
         # Get all transactions for this portfolio
         holdings = {}
@@ -51,7 +63,8 @@ class Portfolio(models.Model):
                     'total_dividends': Decimal('0'),
                     'realized_gains': Decimal('0'),
                     'transactions': [],
-                    'buy_lots': []  # For FIFO calculation
+                    'buy_lots': [],  # For FIFO calculation
+                    'net_cash_invested': Decimal('0'),  # Track net cash position
                 }
 
             holdings[security_id]['transactions'].append(transaction)
@@ -59,6 +72,9 @@ class Portfolio(models.Model):
             if transaction.transaction_type == 'BUY':
                 holdings[security_id]['quantity'] += transaction.quantity
                 holdings[security_id]['total_cost'] += transaction.total_value
+                # Add to net cash invested (money out)
+                holdings[security_id]['net_cash_invested'] += transaction.total_value
+
                 # Add to buy lots for FIFO tracking
                 holdings[security_id]['buy_lots'].append({
                     'date': transaction.transaction_date,
@@ -70,6 +86,8 @@ class Portfolio(models.Model):
             elif transaction.transaction_type == 'SELL':
                 holdings[security_id]['quantity'] -= transaction.quantity
                 holdings[security_id]['total_proceeds'] += transaction.total_value
+                # Subtract from net cash invested (money in)
+                holdings[security_id]['net_cash_invested'] -= transaction.total_value
 
                 # Calculate realized gains using FIFO
                 remaining_to_sell = transaction.quantity
@@ -88,30 +106,53 @@ class Portfolio(models.Model):
 
             elif transaction.transaction_type == 'DIVIDEND':
                 holdings[security_id]['total_dividends'] += transaction.total_value
+                # Subtract from net cash invested (money in)
+                holdings[security_id]['net_cash_invested'] -= transaction.total_value
 
         # Calculate current metrics for each holding
         for security_id, data in holdings.items():
             if data['quantity'] > 0:
-                # Calculate average cost for remaining shares
-                remaining_cost = sum(
-                    lot['remaining'] * lot['price']
-                    for lot in data['buy_lots']
-                    if lot['remaining'] > 0
-                )
-                data['avg_cost'] = remaining_cost / data['quantity'] if data['quantity'] > 0 else 0
+                # Calculate average cost based on net cash invested
+                # This is your method: (Total Paid - Dividends Received - Sell Proceeds) / Current Shares
+                if data['quantity'] > 0:
+                    data['avg_cost'] = data['net_cash_invested'] / data['quantity']
+                    # Ensure average cost doesn't go negative
+                    if data['avg_cost'] < 0:
+                        data['avg_cost'] = Decimal('0')
+                else:
+                    data['avg_cost'] = Decimal('0')
+
+                # Calculate current value and unrealized gains
                 data['current_value'] = data['quantity'] * data['security'].current_price
-                data['unrealized_gains'] = data['current_value'] - remaining_cost
+
+                # For unrealized gains, compare current value to net invested amount
+                data['unrealized_gains'] = data['current_value'] - data['net_cash_invested']
                 data['total_gains'] = data['realized_gains'] + data['unrealized_gains']
 
-        # Filter out positions with 0 quantity
+            # Filter out positions with 0 quantity
         return {k: v for k, v in holdings.items() if v['quantity'] > 0}
+
+    def get_total_value(self):
+        """Get total portfolio value including cash"""
+        holdings_value = sum(h['current_value'] for h in self.get_holdings().values())
+        cash_value = self.cash_account.balance if hasattr(self, 'cash_account') else Decimal('0')
+        return holdings_value + cash_value
+
+    def get_summary_with_cash(self):
+        """Get portfolio summary including cash position"""
+        summary = self.get_summary()
+        if hasattr(self, 'cash_account'):
+            summary['cash_balance'] = float(self.cash_account.balance)
+            summary['total_value_with_cash'] = float(self.get_total_value())
+        return summary
 
     def get_summary(self):
         """Get portfolio summary statistics"""
         holdings = self.get_holdings()
 
         total_value = sum(h['current_value'] for h in holdings.values())
-        total_cost = sum(h['quantity'] * h['avg_cost'] for h in holdings.values())
+        # Use net_cash_invested for total cost instead of quantity * avg_cost
+        total_cost = sum(h.get('net_cash_invested', h['quantity'] * h['avg_cost']) for h in holdings.values())
         total_gains = sum(h['total_gains'] for h in holdings.values())
         total_dividends = sum(h['total_dividends'] for h in holdings.values())
 
@@ -420,3 +461,150 @@ class RealEstateAsset(models.Model):
     @property
     def unrealized_gain_pct(self):
         return ((self.current_value - self.purchase_price) / self.purchase_price * 100) if self.purchase_price > 0 else 0
+
+
+class PortfolioCashAccount(models.Model):
+    """Cash account associated with each portfolio"""
+    portfolio = models.OneToOneField(
+        Portfolio,
+        on_delete=models.CASCADE,
+        related_name='cash_account'
+    )
+    balance = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        default=Decimal('0'),
+        validators=[MinValueValidator(Decimal('0'))]
+    )
+    currency = models.CharField(max_length=3, default='USD')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.portfolio.name} Cash Account - {self.currency} {self.balance}"
+
+    def has_sufficient_balance(self, amount):
+        """Check if account has sufficient balance for a transaction"""
+        return self.balance >= amount
+
+    def update_balance(self, amount):
+        """Update balance by amount (positive for deposits, negative for withdrawals)"""
+        self.balance += Decimal(str(amount))
+        self.save()
+
+
+class CashTransaction(models.Model):
+    """Record of all cash movements in portfolio"""
+    TRANSACTION_TYPES = [
+        ('DEPOSIT', 'Deposit'),
+        ('WITHDRAWAL', 'Withdrawal'),
+        ('BUY', 'Security Purchase'),
+        ('SELL', 'Security Sale'),
+        ('DIVIDEND', 'Dividend Payment'),
+        ('INTEREST', 'Interest Payment'),
+        ('FEE', 'Fee'),
+        ('TRANSFER_IN', 'Transfer In'),
+        ('TRANSFER_OUT', 'Transfer Out'),
+    ]
+
+    # Relationships
+    cash_account = models.ForeignKey(
+        PortfolioCashAccount,
+        on_delete=models.CASCADE,
+        related_name='transactions'
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='cash_transactions'
+    )
+    related_transaction = models.OneToOneField(
+        Transaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cash_transaction'
+    )
+
+    # Transaction details
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES, db_index=True)
+    amount = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        help_text="Positive for inflows, negative for outflows"
+    )
+    balance_after = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        help_text="Cash balance after this transaction"
+    )
+
+    # Additional info
+    description = models.TextField(blank=True)
+    transaction_date = models.DateTimeField(default=timezone.now, db_index=True)
+    is_auto_deposit = models.BooleanField(
+        default=False,
+        help_text="True if this was an automatic deposit for insufficient funds"
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-transaction_date', '-created_at']
+        indexes = [
+            models.Index(fields=['cash_account', 'transaction_date']),
+            models.Index(fields=['transaction_type', 'transaction_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.transaction_type} - {self.amount} - {self.transaction_date.date()}"
+
+    def save(self, *args, **kwargs):
+        # Auto-set balance_after if not provided
+        if not self.balance_after:
+            self.balance_after = self.cash_account.balance + self.amount
+        super().save(*args, **kwargs)
+
+
+class UserPreferences(models.Model):
+    """User preferences for portfolio management"""
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='portfolio_preferences'
+    )
+
+    # Cash management preferences
+    auto_deposit_enabled = models.BooleanField(
+        default=True,
+        help_text="Automatically create deposits when buying with insufficient cash"
+    )
+    auto_deposit_mode = models.CharField(
+        max_length=20,
+        choices=[
+            ('EXACT', 'Deposit exact amount needed'),
+            ('SHORTFALL', 'Deposit only the shortfall'),
+        ],
+        default='EXACT'
+    )
+    show_cash_warnings = models.BooleanField(
+        default=True,
+        help_text="Show warnings when cash balance is low"
+    )
+
+    # Display preferences
+    default_currency = models.CharField(max_length=3, default='USD')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "User Preferences"
+
+    def __str__(self):
+        return f"{self.user.username} preferences"
