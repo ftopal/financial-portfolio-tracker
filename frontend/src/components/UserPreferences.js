@@ -31,6 +31,7 @@ const UserPreferences = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   useEffect(() => {
     fetchPreferences();
@@ -40,8 +41,17 @@ const UserPreferences = () => {
     try {
       setLoading(true);
       const response = await api.preferences.get();
+
       if (response.data.results && response.data.results.length > 0) {
-        setPreferences(response.data.results[0]);
+        const savedPreferences = response.data.results[0];
+        setPreferences({
+          id: savedPreferences.id,
+          auto_deposit_enabled: savedPreferences.auto_deposit_enabled,
+          auto_deposit_mode: savedPreferences.auto_deposit_mode,
+          show_cash_warnings: savedPreferences.show_cash_warnings,
+          default_currency: savedPreferences.default_currency
+        });
+        setHasLoaded(true);
       }
     } catch (err) {
       console.error('Error fetching preferences:', err);
@@ -64,7 +74,18 @@ const UserPreferences = () => {
       setSaving(true);
       setMessage({ type: '', text: '' });
 
-      await api.preferences.update(preferences);
+      // Include only the fields that should be updated
+      const dataToSave = {
+        auto_deposit_enabled: preferences.auto_deposit_enabled,
+        auto_deposit_mode: preferences.auto_deposit_mode,
+        show_cash_warnings: preferences.show_cash_warnings,
+        default_currency: preferences.default_currency
+      };
+
+      await api.preferences.update(dataToSave);
+
+      // Refresh preferences after save to ensure we have latest data
+      await fetchPreferences();
 
       setMessage({ type: 'success', text: 'Preferences saved successfully!' });
     } catch (err) {
@@ -112,32 +133,38 @@ const UserPreferences = () => {
                 color="primary"
               />
             }
-            label="Enable Auto-Deposits"
+            label="Enable Auto-Deposit"
+            sx={{ display: 'block', mb: 2 }}
           />
-          <Typography variant="body2" color="textSecondary" sx={{ ml: 4, mb: 2 }}>
-            Automatically create deposits when buying securities with insufficient cash
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Automatically deposit cash when buying securities with insufficient balance
           </Typography>
 
-          {preferences.auto_deposit_enabled && (
-            <FormControl component="fieldset" sx={{ ml: 4, mb: 2 }}>
-              <FormLabel component="legend">Auto-Deposit Mode</FormLabel>
-              <RadioGroup
-                value={preferences.auto_deposit_mode}
-                onChange={handleChange('auto_deposit_mode')}
-              >
-                <FormControlLabel
-                  value="EXACT"
-                  control={<Radio />}
-                  label="Deposit exact amount needed"
-                />
-                <FormControlLabel
-                  value="SHORTFALL"
-                  control={<Radio />}
-                  label="Deposit only the missing amount"
-                />
-              </RadioGroup>
-            </FormControl>
-          )}
+          <FormControl component="fieldset" disabled={!preferences.auto_deposit_enabled}>
+            <FormLabel component="legend">Auto-Deposit Mode</FormLabel>
+            <RadioGroup
+              value={preferences.auto_deposit_mode}
+              onChange={handleChange('auto_deposit_mode')}
+            >
+              <FormControlLabel
+                value="EXACT"
+                control={<Radio />}
+                label="Deposit exact amount needed for transaction"
+              />
+              <FormControlLabel
+                value="SHORTFALL"
+                control={<Radio />}
+                label="Deposit only the shortfall amount"
+              />
+            </RadioGroup>
+          </FormControl>
+        </Box>
+
+        <Divider sx={{ my: 3 }} />
+
+        <Box sx={{ mb: 4 }}>
+          <Typography variant="h6" gutterBottom>Notifications</Typography>
 
           <FormControlLabel
             control={
@@ -148,35 +175,20 @@ const UserPreferences = () => {
               />
             }
             label="Show Cash Warnings"
+            sx={{ display: 'block', mb: 2 }}
           />
-          <Typography variant="body2" color="textSecondary" sx={{ ml: 4 }}>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Display warnings when cash balance is low
           </Typography>
         </Box>
 
-        <Divider sx={{ my: 3 }} />
-
-        <Box sx={{ mb: 4 }}>
-          <Typography variant="h6" gutterBottom>Display Settings</Typography>
-
-          <FormControl component="fieldset">
-            <FormLabel component="legend">Default Currency</FormLabel>
-            <RadioGroup
-              row
-              value={preferences.default_currency}
-              onChange={handleChange('default_currency')}
-            >
-              <FormControlLabel value="USD" control={<Radio />} label="USD ($)" />
-              <FormControlLabel value="EUR" control={<Radio />} label="EUR (€)" />
-              <FormControlLabel value="GBP" control={<Radio />} label="GBP (£)" />
-            </RadioGroup>
-          </FormControl>
-        </Box>
-
-        <Box display="flex" justifyContent="flex-end">
+        <Box display="flex" justifyContent="flex-end" gap={2}>
+          <Button onClick={fetchPreferences} disabled={loading || saving}>
+            Reset
+          </Button>
           <Button
             variant="contained"
-            color="primary"
             startIcon={<SaveIcon />}
             onClick={handleSave}
             disabled={saving}

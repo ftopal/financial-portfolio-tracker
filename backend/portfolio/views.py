@@ -443,6 +443,28 @@ class UserPreferencesViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return UserPreferences.objects.filter(user=self.request.user)
 
+    def list(self, request, *args, **kwargs):
+        """Override list to ensure user always has preferences"""
+        # Get or create preferences for the user
+        preferences, created = UserPreferences.objects.get_or_create(
+            user=request.user,
+            defaults={
+                'auto_deposit_enabled': True,
+                'auto_deposit_mode': 'EXACT',
+                'show_cash_warnings': True,
+                'default_currency': 'USD'
+            }
+        )
+
+        # Return single object as list for consistency with frontend
+        serializer = self.get_serializer([preferences], many=True)
+        return Response({
+            'count': 1,
+            'next': None,
+            'previous': None,
+            'results': serializer.data
+        })
+
     def get_object(self):
         """Get or create user preferences"""
         obj, created = UserPreferences.objects.get_or_create(
@@ -469,10 +491,16 @@ class UserPreferencesViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(existing, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
             self.perform_update(serializer)
-            return Response(serializer.data)
+            return Response(serializer.data, status=200)
         else:
             # Create new preferences
             return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        """Override update to ensure correct instance"""
+        # Force partial update
+        kwargs['partial'] = True
+        return super().update(request, *args, **kwargs)
 
 
 @api_view(['GET'])

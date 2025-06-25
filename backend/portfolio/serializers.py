@@ -263,4 +263,13 @@ class UserPreferencesSerializer(serializers.ModelSerializer):
             'id', 'username', 'auto_deposit_enabled', 'auto_deposit_mode',
             'show_cash_warnings', 'default_currency', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['user', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'username', 'created_at', 'updated_at']
+
+    def update(self, instance, validated_data):
+        """Ensure all fields are properly updated"""
+        instance.auto_deposit_enabled = validated_data.get('auto_deposit_enabled', instance.auto_deposit_enabled)
+        instance.auto_deposit_mode = validated_data.get('auto_deposit_mode', instance.auto_deposit_mode)
+        instance.show_cash_warnings = validated_data.get('show_cash_warnings', instance.show_cash_warnings)
+        instance.default_currency = validated_data.get('default_currency', instance.default_currency)
+        instance.save()
+        return instance
