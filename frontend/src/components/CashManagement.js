@@ -107,16 +107,20 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
 
       setSuccess(`Successfully ${transactionType === 'DEPOSIT' ? 'deposited' : 'withdrew'} ${formatCurrency(numAmount)}`);
 
-      // Refresh cash history if on history tab
-      if (tabValue === 1) {
-        fetchCashHistory();
-      }
+      // Reset form
+      setAmount('');
+      setDescription('');
 
-      // Notify parent component to refresh
+      // Refresh data
       if (onBalanceUpdate) {
         onBalanceUpdate();
       }
 
+      if (tabValue === 1) {
+        fetchCashHistory();
+      }
+
+      // Close dialog after delay
       setTimeout(() => {
         handleClose();
       }, 1500);
@@ -130,96 +134,83 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
-      currency: currency
+      currency: currency || 'USD'
     }).format(amount);
   };
 
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+  const getTransactionTypeChip = (type) => {
+    const config = {
+      'DEPOSIT': { color: 'success', icon: <AddIcon fontSize="small" /> },
+      'WITHDRAWAL': { color: 'error', icon: <RemoveIcon fontSize="small" /> },
+      'BUY': { color: 'primary', icon: <TrendingDown fontSize="small" /> },
+      'SELL': { color: 'secondary', icon: <TrendingUp fontSize="small" /> },
+      'DIVIDEND': { color: 'success', icon: <AttachMoney fontSize="small" /> },
+      'FEE': { color: 'warning', icon: <RemoveIcon fontSize="small" /> },
+    };
 
-  const getTransactionIcon = (type) => {
-    switch (type) {
-      case 'DEPOSIT':
-      case 'SELL':
-      case 'DIVIDEND':
-      case 'INTEREST':
-        return <TrendingUp color="success" />;
-      case 'WITHDRAWAL':
-      case 'BUY':
-      case 'FEE':
-        return <TrendingDown color="error" />;
-      default:
-        return <AttachMoney />;
-    }
-  };
+    const { color, icon } = config[type] || { color: 'default', icon: null };
 
-  const getTransactionColor = (type) => {
-    switch (type) {
-      case 'DEPOSIT':
-      case 'SELL':
-      case 'DIVIDEND':
-      case 'INTEREST':
-        return 'success';
-      case 'WITHDRAWAL':
-      case 'BUY':
-      case 'FEE':
-        return 'error';
-      default:
-        return 'default';
-    }
+    return (
+      <Chip
+        label={type}
+        color={color}
+        size="small"
+        icon={icon}
+      />
+    );
   };
 
   return (
-    <Card>
+    <Card sx={{ mb: 3 }}>
       <CardContent>
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Box display="flex" alignItems="center" gap={1}>
+          <Box display="flex" alignItems="center" gap={2}>
             <AccountBalanceIcon color="primary" />
             <Typography variant="h6">Cash Account</Typography>
           </Box>
-          <Typography variant="h4" color="primary">
+          <Typography variant="h5" fontWeight="bold" color="primary">
             {formatCurrency(cashBalance)}
           </Typography>
         </Box>
 
-        <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)} sx={{ mb: 2 }}>
-          <Tab label="Actions" />
-          <Tab label="History" icon={<HistoryIcon />} iconPosition="end" />
+        <Box display="flex" gap={2} mb={3}>
+          <Button
+            variant="contained"
+            color="success"
+            startIcon={<AddIcon />}
+            onClick={() => handleOpen('DEPOSIT')}
+            size="small"
+          >
+            Deposit
+          </Button>
+          <Button
+            variant="outlined"
+            color="error"
+            startIcon={<RemoveIcon />}
+            onClick={() => handleOpen('WITHDRAWAL')}
+            size="small"
+          >
+            Withdraw
+          </Button>
+        </Box>
+
+        {/* Tabs for Overview/History */}
+        <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
+          <Tab label="Overview" />
+          <Tab label="History" icon={<HistoryIcon fontSize="small" />} iconPosition="end" />
         </Tabs>
 
+        {/* Tab Content */}
         {tabValue === 0 && (
-          <Box display="flex" gap={2}>
-            <Button
-              variant="contained"
-              color="success"
-              startIcon={<AddIcon />}
-              onClick={() => handleOpen('DEPOSIT')}
-              fullWidth
-            >
-              Deposit
-            </Button>
-            <Button
-              variant="outlined"
-              color="error"
-              startIcon={<RemoveIcon />}
-              onClick={() => handleOpen('WITHDRAWAL')}
-              fullWidth
-              disabled={cashBalance <= 0}
-            >
-              Withdraw
-            </Button>
+          <Box py={2}>
+            <Typography variant="body2" color="textSecondary">
+              Manage your portfolio's cash balance. Deposit funds to buy securities or withdraw excess cash.
+            </Typography>
           </Box>
         )}
 
         {tabValue === 1 && (
-          <TableContainer component={Paper} variant="outlined">
+          <TableContainer component={Paper} variant="outlined" sx={{ mt: 2 }}>
             {historyLoading ? (
               <Box display="flex" justifyContent="center" p={3}>
                 <CircularProgress />
@@ -236,36 +227,29 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                     <TableCell>Type</TableCell>
                     <TableCell>Description</TableCell>
                     <TableCell align="right">Amount</TableCell>
-                    <TableCell align="right">Balance</TableCell>
+                    <TableCell align="right">Balance After</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {cashHistory.map((transaction) => (
                     <TableRow key={transaction.id}>
-                      <TableCell>{formatDate(transaction.transaction_date)}</TableCell>
                       <TableCell>
-                        <Box display="flex" alignItems="center" gap={1}>
-                          {getTransactionIcon(transaction.transaction_type)}
-                          <Chip
-                            label={transaction.transaction_type}
-                            size="small"
-                            color={getTransactionColor(transaction.transaction_type)}
-                            variant="outlined"
-                          />
-                        </Box>
+                        {new Date(transaction.transaction_date).toLocaleDateString()}
                       </TableCell>
+                      <TableCell>{getTransactionTypeChip(transaction.transaction_type)}</TableCell>
                       <TableCell>
-                        {transaction.description}
+                        <Typography variant="body2">{transaction.description}</Typography>
                         {transaction.is_auto_deposit && (
-                          <Chip label="Auto" size="small" sx={{ ml: 1 }} />
+                          <Chip label="Auto-deposit" size="small" color="info" sx={{ ml: 1 }} />
                         )}
                       </TableCell>
                       <TableCell align="right">
                         <Typography
+                          variant="body2"
                           color={transaction.amount > 0 ? 'success.main' : 'error.main'}
                           fontWeight="medium"
                         >
-                          {transaction.amount > 0 ? '+' : ''}{formatCurrency(transaction.amount)}
+                          {transaction.amount > 0 ? '+' : ''}{formatCurrency(Math.abs(transaction.amount))}
                         </Typography>
                       </TableCell>
                       <TableCell align="right">{formatCurrency(transaction.balance_after)}</TableCell>
@@ -297,19 +281,12 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
               onChange={(e) => setAmount(e.target.value)}
               InputProps={{
                 startAdornment: (
-                  <Typography color="textSecondary" sx={{ mr: 1 }}>
-                    {currency}
-                  </Typography>
+                  <InputAdornment position="start">
+                    <Typography color="textSecondary">
+                      {currency}
+                    </Typography>
+                  </InputAdornment>
                 )
-              }}
-              sx={{ mb: 2 }}
-            />="number"
-              fullWidth
-              variant="outlined"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              InputProps={{
-                startAdornment: currency + ' '
               }}
               sx={{ mb: 2 }}
             />
