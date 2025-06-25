@@ -1,5 +1,3 @@
-// frontend/src/components/CashManagement.js
-
 import React, { useState, useEffect } from 'react';
 import {
   Card,
@@ -25,7 +23,8 @@ import {
   Chip,
   IconButton,
   CircularProgress,
-  InputAdornment
+  InputAdornment,
+  Tooltip
 } from '@mui/material';
 import {
   AccountBalance as AccountBalanceIcon,
@@ -34,7 +33,8 @@ import {
   History as HistoryIcon,
   TrendingUp,
   TrendingDown,
-  AttachMoney
+  AttachMoney,
+  Delete as DeleteIcon
 } from '@mui/icons-material';
 import { api } from '../services/api';
 
@@ -49,6 +49,9 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
   const [tabValue, setTabValue] = useState(0);
   const [cashHistory, setCashHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [transactionToDelete, setTransactionToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (tabValue === 1) {
@@ -81,6 +84,39 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
     setOpen(false);
     setError('');
     setSuccess('');
+  };
+
+  const handleDeleteClick = (transaction) => {
+    setTransactionToDelete(transaction);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!transactionToDelete) return;
+    
+    setDeleting(true);
+    try {
+      await api.cash.delete(transactionToDelete.id);
+      setSuccess(`Transaction deleted successfully`);
+      
+      // Refresh data
+      if (onBalanceUpdate) {
+        onBalanceUpdate();
+      }
+      fetchCashHistory();
+      
+      setDeleteConfirmOpen(false);
+      setTransactionToDelete(null);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to delete transaction');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteConfirmOpen(false);
+    setTransactionToDelete(null);
   };
 
   const handleSubmit = async () => {
@@ -160,6 +196,11 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
     );
   };
 
+  const canDeleteTransaction = (transaction) => {
+    // Don't allow deletion of auto-generated transactions (like from stock trades)
+    return transaction.transaction_type === 'DEPOSIT' || transaction.transaction_type === 'WITHDRAWAL';
+  };
+
   return (
     <Card sx={{ mb: 3 }}>
       <CardContent>
@@ -193,6 +234,10 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
             Withdraw
           </Button>
         </Box>
+
+        {/* Success/Error Messages */}
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
 
         {/* Tabs for Overview/History */}
         <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)}>
@@ -228,6 +273,7 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                     <TableCell>Description</TableCell>
                     <TableCell align="right">Amount</TableCell>
                     <TableCell align="right">Balance After</TableCell>
+                    <TableCell align="center">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -253,6 +299,27 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                         </Typography>
                       </TableCell>
                       <TableCell align="right">{formatCurrency(transaction.balance_after)}</TableCell>
+                      <TableCell align="center">
+                        {canDeleteTransaction(transaction) ? (
+                          <Tooltip title="Delete transaction">
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={() => handleDeleteClick(transaction)}
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip title="Cannot delete auto-generated transactions">
+                            <span>
+                              <IconButton size="small" disabled>
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -319,6 +386,48 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
               disabled={loading || !amount}
             >
               {loading ? <CircularProgress size={24} /> : transactionType}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <Dialog open={deleteConfirmOpen} onClose={handleDeleteCancel}>
+          <DialogTitle>Delete Transaction</DialogTitle>
+          <DialogContent>
+            <Typography>
+              Are you sure you want to delete this transaction?
+            </Typography>
+            {transactionToDelete && (
+              <Box mt={2} p={2} bgcolor="grey.100" borderRadius={1}>
+                <Typography variant="body2">
+                  <strong>Date:</strong> {new Date(transactionToDelete.transaction_date).toLocaleDateString()}
+                </Typography>
+                <Typography variant="body2">
+                  <strong>Type:</strong> {transactionToDelete.transaction_type}
+                </Typography>
+                <Typography variant="body2">
+                  <strong>Amount:</strong> {formatCurrency(Math.abs(transactionToDelete.amount))}
+                </Typography>
+                <Typography variant="body2">
+                  <strong>Description:</strong> {transactionToDelete.description}
+                </Typography>
+              </Box>
+            )}
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              This action cannot be undone. Deleting this transaction will affect your cash balance.
+            </Alert>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleDeleteCancel} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleDeleteConfirm}
+              variant="contained"
+              color="error"
+              disabled={deleting}
+            >
+              {deleting ? <CircularProgress size={24} /> : 'Delete'}
             </Button>
           </DialogActions>
         </Dialog>
