@@ -59,6 +59,31 @@ const TransactionForm = ({
   const [searchInput, setSearchInput] = useState('');
   const [portfolioHoldings, setPortfolioHoldings] = useState({});
 
+  const fetchPortfolio = useCallback(async () => {
+    try {
+      const response = await api.portfolios.get(portfolioId);
+      setPortfolio(response.data);
+    } catch (err) {
+      console.error('Failed to fetch portfolio:', err);
+    }
+  }, [portfolioId]);
+
+  const fetchPortfolioHoldings = useCallback(async () => {
+    try {
+      const response = await api.portfolios.getHoldings(portfolioId);
+      const holdings = {};
+      if (response.data) {
+        // Create a map of symbol to quantity for easy lookup
+        Object.values(response.data).forEach(holding => {
+          holdings[holding.security.symbol] = holding.quantity;
+        });
+      }
+      setPortfolioHoldings(holdings);
+    } catch (err) {
+      console.error('Failed to fetch holdings:', err);
+    }
+  }, [portfolioId]);
+
   useEffect(() => {
     if (open) {
       fetchPortfolio();
@@ -103,32 +128,7 @@ const TransactionForm = ({
     }
   }, [open, security, transaction, existingHoldings, fetchPortfolio, fetchPortfolioHoldings]);
 
-  const fetchPortfolio = useCallback(async () => {
-    try {
-      const response = await api.portfolios.get(portfolioId);
-      setPortfolio(response.data);
-    } catch (err) {
-      console.error('Failed to fetch portfolio:', err);
-    }
-  }, [portfolioId]);
-
-  const fetchPortfolioHoldings = useCallback(async () => {
-    try {
-      const response = await api.portfolios.getHoldings(portfolioId);
-      const holdings = {};
-      if (response.data) {
-        // Create a map of symbol to quantity for easy lookup
-        Object.values(response.data).forEach(holding => {
-          holdings[holding.security.symbol] = holding.quantity;
-        });
-      }
-      setPortfolioHoldings(holdings);
-    } catch (err) {
-      console.error('Failed to fetch holdings:', err);
-    }
-  }, [portfolioId]);
-
-  // Also update the form data when transaction type changes to DIVIDEND
+    // Also update the form data when transaction type changes to DIVIDEND
   useEffect(() => {
     if (formData.transaction_type === 'DIVIDEND' && selectedSecurity) {
       const holdingQuantity = portfolioHoldings[selectedSecurity.symbol] || selectedSecurity.total_quantity || 0;
@@ -197,16 +197,6 @@ const TransactionForm = ({
     }
   };
 
-  // Calculate exchange rate when currency changes
-  useEffect(() => {
-    if (portfolio && formData.currency !== portfolio.currency && formData.price && formData.quantity) {
-      fetchExchangeRate();
-    } else {
-      setExchangeRate(null);
-      setConvertedAmount(null);
-    }
-  }, [formData.currency, formData.price, formData.quantity, portfolio, fetchExchangeRate]);
-
   const fetchExchangeRate = useCallback(async () => {
     try {
       const amount = parseFloat(formData.price) * parseFloat(formData.quantity);
@@ -225,6 +215,16 @@ const TransactionForm = ({
       setConvertedAmount(null);
     }
   }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, portfolio]);
+
+  // Calculate exchange rate when currency changes
+  useEffect(() => {
+    if (portfolio && formData.currency !== portfolio.currency && formData.price && formData.quantity) {
+      fetchExchangeRate();
+    } else {
+      setExchangeRate(null);
+      setConvertedAmount(null);
+    }
+  }, [formData.currency, formData.price, formData.quantity, portfolio, fetchExchangeRate]);
 
   const handleSubmit = async (e) => {
   e.preventDefault();
@@ -258,23 +258,6 @@ const TransactionForm = ({
     setLoading(false);
   }
 };
-
-  const resetForm = () => {
-    setFormData({
-      transaction_type: 'BUY',
-      quantity: '',
-      price: '',
-      currency: 'USD',
-      transaction_date: new Date().toISOString().split('T')[0],
-      fees: '0',
-      notes: ''
-    });
-    setSelectedSecurity(null);
-    setSearchInput('');
-    setSearchOptions([]);
-    setExchangeRate(null);
-    setConvertedAmount(null);
-  };
 
   const totalAmount = parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);
   const totalWithFees = totalAmount + parseFloat(formData.fees || 0);
