@@ -443,7 +443,7 @@ const TransactionForm = ({
               label={formData.transaction_type === 'DIVIDEND' ? 'Number of Shares' : 'Quantity'}
               value={formData.quantity}
               onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
-              inputProps={{ step: "0.0001", min: "0" }}
+              inputProps={{ step: "0.00000001", min: "0" }}
               fullWidth
               required
               helperText={
@@ -458,7 +458,7 @@ const TransactionForm = ({
               label={formData.transaction_type === 'DIVIDEND' ? 'Total Dividend Amount' : 'Price per Unit'}
               value={formData.price}
               onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-              inputProps={{ step: "0.01", min: "0" }}
+              inputProps={{ step: "0.00000001", min: "0" }}
               fullWidth
               required
               helperText={
