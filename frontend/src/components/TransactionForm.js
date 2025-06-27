@@ -1,6 +1,6 @@
 // frontend/src/components/TransactionForm.js - Updated with MUI Autocomplete + Yahoo Import
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -101,18 +101,18 @@ const TransactionForm = ({
         setSelectedSecurity(transaction.security);
       }
     }
-  }, [open, security, transaction, existingHoldings]);
+  }, [open, security, transaction, existingHoldings, fetchPortfolio, fetchPortfolioHoldings]);
 
-  const fetchPortfolio = async () => {
+  const fetchPortfolio = useCallback(async () => {
     try {
       const response = await api.portfolios.get(portfolioId);
       setPortfolio(response.data);
     } catch (err) {
       console.error('Failed to fetch portfolio:', err);
     }
-  };
+  }, [portfolioId]);
 
-  const fetchPortfolioHoldings = async () => {
+  const fetchPortfolioHoldings = useCallback(async () => {
     try {
       const response = await api.portfolios.getHoldings(portfolioId);
       const holdings = {};
@@ -126,7 +126,7 @@ const TransactionForm = ({
     } catch (err) {
       console.error('Failed to fetch holdings:', err);
     }
-  };
+  }, [portfolioId]);
 
   // Also update the form data when transaction type changes to DIVIDEND
   useEffect(() => {
@@ -139,7 +139,8 @@ const TransactionForm = ({
         }));
       }
     }
-  }, [formData.transaction_type, selectedSecurity, portfolioHoldings]);
+  }, [formData.transaction_type, formData.quantity, selectedSecurity, portfolioHoldings]);
+
   const searchSecurities = React.useMemo(
     () =>
       debounce(async (query) => {
@@ -204,9 +205,9 @@ const TransactionForm = ({
       setExchangeRate(null);
       setConvertedAmount(null);
     }
-  }, [formData.currency, formData.price, formData.quantity, portfolio]);
+  }, [formData.currency, formData.price, formData.quantity, portfolio, fetchExchangeRate]);
 
-  const fetchExchangeRate = async () => {
+  const fetchExchangeRate = useCallback(async () => {
     try {
       const amount = parseFloat(formData.price) * parseFloat(formData.quantity);
       const response = await api.currencies.convert({
@@ -223,40 +224,40 @@ const TransactionForm = ({
       setExchangeRate(null);
       setConvertedAmount(null);
     }
-  };
+  }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, portfolio]);
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
+  e.preventDefault();
+  setLoading(true);
+  setError('');
 
-    try {
-      const data = {
-        portfolio: portfolioId,
-        security: selectedSecurity.id,
-        ...formData,
-        quantity: parseFloat(formData.quantity),
-        price: parseFloat(formData.price),
-        fees: parseFloat(formData.fees || 0),
-        currency: formData.currency
-      };
+  try {
+    const data = {
+      portfolio: portfolioId,
+      security: selectedSecurity.id,
+      ...formData,
+      quantity: parseFloat(formData.quantity),
+      price: parseFloat(formData.price),
+      fees: parseFloat(formData.fees || 0),
+      currency: formData.currency
+    };
 
-      if (transaction) {
-        await api.transactions.update(transaction.id, data);
-      } else {
-        await api.transactions.create(data);
-      }
-
-      onSuccess();
-      onClose();
-      resetForm();
-    } catch (err) {
-      console.error('Transaction error:', err);
-      setError(err.response?.data?.detail || 'Failed to save transaction');
-    } finally {
-      setLoading(false);
+    if (transaction) {
+      await api.transactions.update(transaction.id, data);
+    } else {
+      await api.transactions.create(data);
     }
-  };
+
+    onSuccess();
+    onClose();
+    // Remove resetForm() call since the form is closing anyway
+  } catch (err) {
+    console.error('Transaction error:', err);
+    setError(err.response?.data?.detail || 'Failed to save transaction');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const resetForm = () => {
     setFormData({
@@ -479,7 +480,13 @@ const TransactionForm = ({
               required
               helperText={
                 formData.transaction_type === 'DIVIDEND'
-                  ? 'Enter the total dividend amount received'
+                  ? formData.quantity && formData.price
+                    ? <span>Dividend per share: <CurrencyDisplay
+                        amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
+                        currency={formData.currency}
+                        showCode={false}
+                      /></span>
+                    : 'Enter the total dividend amount received'
                   : ''
               }
             />
@@ -525,6 +532,17 @@ const TransactionForm = ({
                 showCode={true}
               />
             </Box>
+
+            {formData.transaction_type === 'DIVIDEND' && formData.quantity && formData.price && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="body2">Dividend per share:</Typography>
+                <CurrencyDisplay
+                  amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
+                  currency={formData.currency}
+                  showCode={true}
+                />
+              </Box>
+            )}
 
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
               <Typography variant="body2">Fees:</Typography>

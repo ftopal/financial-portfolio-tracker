@@ -366,7 +366,13 @@ class Transaction(models.Model):
         elif self.transaction_type == 'SELL':
             return (self.quantity * self.price) - self.fees
         elif self.transaction_type == 'DIVIDEND':
-            return self.quantity * (self.dividend_per_share or Decimal('0'))
+            # Use dividend_per_share if available, otherwise calculate from price
+            if self.dividend_per_share:
+                return self.quantity * self.dividend_per_share
+            elif self.price and self.quantity:
+                # Price contains total dividend amount
+                return self.price
+            return Decimal('0')
         elif self.transaction_type == 'FEE':
             return -self.fees
         elif self.transaction_type == 'INTEREST':
@@ -380,12 +386,15 @@ class Transaction(models.Model):
         if self.transaction_date > timezone.now():
             raise ValidationError("Transaction date cannot be in the future.")
 
-        # Validate dividend fields - if dividend_per_share is not set, calculate it
+        # Validate dividend fields
         if self.transaction_type == 'DIVIDEND':
             if not self.dividend_per_share and self.price and self.quantity:
-                # Don't raise error, just set dividend_per_share from price
-                # This allows frontend to send total amount as price
-                self.dividend_per_share = self.price
+                # Frontend sends total dividend amount in price field
+                # Calculate dividend_per_share from total amount
+                if self.quantity > 0:
+                    self.dividend_per_share = self.price / self.quantity
+                else:
+                    raise ValidationError("Quantity must be greater than 0 for dividend transactions.")
             elif not self.dividend_per_share:
                 raise ValidationError("Dividend per share or price is required for dividend transactions.")
 
