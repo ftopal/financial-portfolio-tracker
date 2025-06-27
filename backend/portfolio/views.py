@@ -205,8 +205,26 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         amount = Decimal(request.data.get('amount', 0))
         description = request.data.get('description', 'Cash deposit')
 
+        # Get transaction date from request or use current time
+        transaction_date_str = request.data.get('transaction_date')
+        if transaction_date_str:
+            try:
+                # Parse the date string and add current time
+                from datetime import datetime
+                transaction_date = datetime.strptime(transaction_date_str, '%Y-%m-%d')
+                # Make it timezone aware
+                transaction_date = timezone.make_aware(transaction_date)
+            except ValueError:
+                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
+        else:
+            transaction_date = timezone.now()
+
         if amount <= 0:
             return Response({'error': 'Amount must be positive'}, status=400)
+
+        # Validate that date is not in the future
+        if transaction_date > timezone.now():
+            return Response({'error': 'Transaction date cannot be in the future'}, status=400)
 
         # Create cash transaction
         cash_transaction = CashTransaction.objects.create(
@@ -215,7 +233,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             transaction_type='DEPOSIT',
             amount=amount,
             description=description,
-            transaction_date=timezone.now()
+            transaction_date=transaction_date  # Use the provided date
         )
 
         # Update balance
@@ -230,8 +248,26 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         amount = Decimal(request.data.get('amount', 0))
         description = request.data.get('description', 'Cash withdrawal')
 
+        # Get transaction date from request or use current time
+        transaction_date_str = request.data.get('transaction_date')
+        if transaction_date_str:
+            try:
+                # Parse the date string and add current time
+                from datetime import datetime
+                transaction_date = datetime.strptime(transaction_date_str, '%Y-%m-%d')
+                # Make it timezone aware
+                transaction_date = timezone.make_aware(transaction_date)
+            except ValueError:
+                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
+        else:
+            transaction_date = timezone.now()
+
         if amount <= 0:
             return Response({'error': 'Amount must be positive'}, status=400)
+
+        # Validate that date is not in the future
+        if transaction_date > timezone.now():
+            return Response({'error': 'Transaction date cannot be in the future'}, status=400)
 
         if not portfolio.cash_account.has_sufficient_balance(amount):
             return Response({'error': 'Insufficient cash balance'}, status=400)
@@ -243,7 +279,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             transaction_type='WITHDRAWAL',
             amount=-amount,
             description=description,
-            transaction_date=timezone.now()
+            transaction_date=transaction_date  # Use the provided date
         )
 
         # Update balance

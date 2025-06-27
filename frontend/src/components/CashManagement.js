@@ -36,7 +36,7 @@ import {
   AttachMoney,
   Delete as DeleteIcon
 } from '@mui/icons-material';
-import { api } from '../services/api';
+import api from '../services/api';
 
 const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBalanceUpdate }) => {
   const [open, setOpen] = useState(false);
@@ -52,6 +52,7 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [transactionDate, setTransactionDate] = useState(new Date().toISOString().split('T')[0]);
 
   useEffect(() => {
     if (tabValue === 1) {
@@ -78,6 +79,7 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
     setSuccess('');
     setAmount('');
     setDescription('');
+    setTransactionDate(new Date().toISOString().split('T')[0]); // Reset to today
   };
 
   const handleClose = () => {
@@ -138,7 +140,8 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
 
       await endpoint(portfolioId, {
         amount: numAmount,
-        description: description || `Cash ${transactionType.toLowerCase()}`
+        description: description || `Cash ${transactionType.toLowerCase()}`,
+        transaction_date: transactionDate // Add this line
       });
 
       setSuccess(`Successfully ${transactionType === 'DEPOSIT' ? 'deposited' : 'withdrew'} ${formatCurrency(numAmount)}`);
@@ -146,6 +149,7 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
       // Reset form
       setAmount('');
       setDescription('');
+      setTransactionDate(new Date().toISOString().split('T')[0]);
 
       // Refresh data
       if (onBalanceUpdate) {
@@ -367,6 +371,23 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder={`Reason for ${transactionType.toLowerCase()}`}
+            />
+
+            <TextField
+              margin="dense"
+              label="Transaction Date"
+              type="date"
+              fullWidth
+              variant="outlined"
+              value={transactionDate}
+              onChange={(e) => setTransactionDate(e.target.value)}
+              InputLabelProps={{
+                shrink: true,
+              }}
+              inputProps={{
+                max: new Date().toISOString().split('T')[0], // Don't allow future dates
+              }}
+              sx={{ mt: 2 }}
             />
 
             {transactionType === 'WITHDRAWAL' && cashBalance < parseFloat(amount || 0) && (
