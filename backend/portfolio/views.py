@@ -1,24 +1,90 @@
-from datetime import timedelta
+from datetime import timedelta, datetime
 from decimal import Decimal
 
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from rest_framework import viewsets
+from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import (
     Portfolio, AssetCategory, Security, Transaction,
-    PriceHistory, CashTransaction, UserPreferences
+    PriceHistory, CashTransaction, UserPreferences,
+    Currency, ExchangeRate
 )
 from .serializers import (
     PortfolioSerializer, PortfolioDetailSerializer,
     AssetCategorySerializer, SecuritySerializer,
-    TransactionSerializer, CashTransactionSerializer, UserPreferencesSerializer
+    TransactionSerializer, CashTransactionSerializer, UserPreferencesSerializer,
+    CurrencySerializer, ExchangeRateSerializer, CurrencyConversionSerializer
 )
 from .services.security_import_service import SecurityImportService
+from .services.currency_service import CurrencyService
+
+
+class CurrencyViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for currencies"""
+    queryset = Currency.objects.filter(is_active=True)
+    serializer_class = CurrencySerializer
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['post'])
+    def convert(self, request):
+        """Convert amount between currencies"""
+        serializer = CurrencyConversionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            converted_amount = CurrencyService.convert_amount(
+                serializer.validated_data['amount'],
+                serializer.validated_data['from_currency'],
+                serializer.validated_data['to_currency'],
+                serializer.validated_data.get('date')
+            )
+
+            return Response({
+                'amount': serializer.validated_data['amount'],
+                'from_currency': serializer.validated_data['from_currency'],
+                'to_currency': serializer.validated_data['to_currency'],
+                'converted_amount': converted_amount,
+                'date': serializer.validated_data.get('date', timezone.now().date())
+            })
+        except ValueError as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=False, methods=['post'])
+    def update_rates(self, request):
+        """Manually trigger exchange rate update"""
+        CurrencyService.update_exchange_rates()
+        return Response({'status': 'Exchange rates update initiated'})
+
+
+class ExchangeRateViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for exchange rates"""
+    serializer_class = ExchangeRateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = ExchangeRate.objects.all()
+
+        # Filter by currencies if provided
+        from_currency = self.request.query_params.get('from_currency')
+        to_currency = self.request.query_params.get('to_currency')
+        date = self.request.query_params.get('date')
+
+        if from_currency:
+            queryset = queryset.filter(from_currency=from_currency)
+        if to_currency:
+            queryset = queryset.filter(to_currency=to_currency)
+        if date:
+            queryset = queryset.filter(date=date)
+
+        return queryset.order_by('-date')[:100]  # Limit to 100 most recent
 
 
 class PortfolioViewSet(viewsets.ModelViewSet):
@@ -202,6 +268,88 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         serializer = CashTransactionSerializer(transactions, many=True)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get'])
+    def value(self, request, pk=None):
+        """Get portfolio value in specified currency"""
+        portfolio = self.get_object()
+        currency = request.query_params.get('currency', portfolio.currency)
+        date = request.query_params.get('date')
+
+        if date:
+            date = datetime.strptime(date, '%Y-%m-%d').date()
+
+        try:
+            value = CurrencyService.get_portfolio_value_in_currency(
+                portfolio, currency, date
+            )
+
+            return Response({
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'base_currency': portfolio.currency,
+                'target_currency': currency,
+                'value': value,
+                'date': date or timezone.now().date()
+            })
+        except ValueError as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(detail=True, methods=['get'])
+    def currency_exposure(self, request, pk=None):
+        """Get portfolio exposure by currency"""
+        portfolio = self.get_object()
+        exposure = CurrencyService.get_currency_exposure(portfolio)
+
+        # Convert to target currency if requested
+        target_currency = request.query_params.get('currency')
+        if target_currency:
+            converted_exposure = {}
+            total = Decimal('0')
+
+            for currency, amount in exposure.items():
+                if currency == target_currency:
+                    converted_exposure[currency] = {
+                        'amount': amount,
+                        'converted_amount': amount,
+                        'percentage': 0  # Will calculate after
+                    }
+                    total += amount
+                else:
+                    converted_amount = CurrencyService.convert_amount(
+                        amount, currency, target_currency
+                    )
+                    converted_exposure[currency] = {
+                        'amount': amount,
+                        'converted_amount': converted_amount,
+                        'percentage': 0  # Will calculate after
+                    }
+                    total += converted_amount
+
+            # Calculate percentages
+            for currency in converted_exposure:
+                if total > 0:
+                    converted_exposure[currency]['percentage'] = float(
+                        (converted_exposure[currency]['converted_amount'] / total) * 100
+                    )
+
+            return Response({
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'target_currency': target_currency,
+                'total_value': total,
+                'exposure': converted_exposure
+            })
+        else:
+            # Return raw exposure
+            return Response({
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'exposure': exposure
+            })
+
 
 class SecurityViewSet(viewsets.ModelViewSet):
     queryset = Security.objects.all()
@@ -245,17 +393,25 @@ class SecurityViewSet(viewsets.ModelViewSet):
         if not symbol:
             return Response({'error': 'Symbol is required'}, status=400)
 
-        service = SecurityImportService()
-        result = service.import_security(symbol)
+        try:
+            service = SecurityImportService()
+            # Fix: Call the correct method name
+            result = service.search_and_import_security(symbol)
 
-        if result.get('error'):
-            return Response({'error': result['error']}, status=400)
+            if result.get('error'):
+                return Response({'error': result['error']}, status=400)
 
-        return Response({
-            'security': SecuritySerializer(result['security']).data,
-            'created': result.get('created', False),
-            'exists': result.get('exists', False)
-        })
+            return Response({
+                'security': SecuritySerializer(result['security']).data,
+                'created': result.get('created', False),
+                'exists': result.get('exists', False)
+            })
+        except Exception as e:
+            logger.error(f"Error importing security {symbol}: {str(e)}")
+            return Response(
+                {'error': f'Failed to import {symbol}. Please check the symbol and try again.'},
+                status=400
+            )
 
     @action(detail=True, methods=['post'])
     def update_price(self, request, pk=None):

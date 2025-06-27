@@ -48,6 +48,19 @@ API.interceptors.response.use(
   }
 );
 
+// Currency endpoints
+API.currencies = {
+  getAll: () => api.get('/api/currencies/'),
+  convert: (data) => api.post('/api/currencies/convert/', data),
+  updateRates: () => api.post('/api/currencies/update_rates/'),
+  getExchangeRates: (params) => api.get('/api/exchange-rates/', { params }),
+};
+
+API.userPreferences = {
+  get: () => api.get('/api/user-preferences/'),
+  update: (data) => api.patch('/api/user-preferences/', data),
+};
+
 // Authentication services
 export const authAPI = {
   login: (username, password) => {
@@ -90,10 +103,19 @@ export const portfolioAPI = {
     return API.get(url);
   },
 
+  getHoldings: (id) => API.get(`portfolios/${id}/holdings/`),
+
   // New cash-related endpoints
   depositCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/deposit_cash/`, data),
   withdrawCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/withdraw_cash/`, data),
-  getCashHistory: (portfolioId) => API.get(`portfolios/${portfolioId}/cash_history/`)
+  getCashHistory: (portfolioId) => API.get(`portfolios/${portfolioId}/cash_history/`),
+  getValueInCurrency: (id, currency) =>
+    api.get(`/api/portfolios/${id}/value/`, { params: { currency } }),
+
+  getCurrencyExposure: (id, currency = null) =>
+    api.get(`/api/portfolios/${id}/currency_exposure/`, {
+      params: currency ? { currency } : {}
+    }),
 };
 
 // Cash Transaction services (NEW)

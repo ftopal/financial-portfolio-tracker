@@ -4,6 +4,7 @@ from .views import (
     PortfolioViewSet, AssetCategoryViewSet, SecurityViewSet,
     TransactionViewSet, CashTransactionViewSet, UserPreferencesViewSet,
     portfolio_summary, portfolio_holdings_consolidated,
+    CurrencyViewSet, ExchangeRateViewSet
 )
 
 router = DefaultRouter()
@@ -12,8 +13,10 @@ router.register(r'categories', AssetCategoryViewSet)
 router.register(r'securities', SecurityViewSet)
 router.register(r'transactions', TransactionViewSet, basename='transaction')
 #router.register(r'real-estate', RealEstateAssetViewSet, basename='real-estate')
-router.register(r'cash-transactions', CashTransactionViewSet, basename='cash-transaction')  # New
-router.register(r'preferences', UserPreferencesViewSet, basename='preferences')  # New
+router.register(r'cash-transactions', CashTransactionViewSet, basename='cash-transaction')
+router.register(r'preferences', UserPreferencesViewSet, basename='preferences')
+router.register(r'currencies', CurrencyViewSet)
+router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchangerate')
 
 urlpatterns = [
     path('', include(router.urls)),

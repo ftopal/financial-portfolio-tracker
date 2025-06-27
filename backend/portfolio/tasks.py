@@ -5,10 +5,59 @@ from django.conf import settings
 from .models import Security, PriceHistory, Transaction
 import yfinance as yf
 from decimal import Decimal
-import logging
 from datetime import timedelta
+from .services.currency_service import CurrencyService
+import logging
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task(bind=True, max_retries=3)
+def update_exchange_rates(self, base_currencies=None, target_currencies=None):
+    """Update exchange rates from external API"""
+    try:
+        logger.info("Starting exchange rate update")
+        CurrencyService.update_exchange_rates(base_currencies, target_currencies)
+        logger.info("Exchange rate update completed successfully")
+        return "Exchange rates updated successfully"
+    except Exception as e:
+        logger.error(f"Failed to update exchange rates: {e}")
+        # Retry with exponential backoff
+        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
+
+
+@shared_task
+def update_portfolio_base_amounts():
+    """Update base amounts for all transactions"""
+    from .models import Transaction
+    from django.utils import timezone
+
+    # Get transactions that need base amount calculation
+    transactions = Transaction.objects.filter(
+        base_amount__isnull=True
+    ).select_related('portfolio', 'security')
+
+    updated_count = 0
+    for transaction in transactions:
+        try:
+            if transaction.currency != transaction.portfolio.currency:
+                exchange_rate = CurrencyService.get_exchange_rate(
+                    transaction.currency,
+                    transaction.portfolio.currency,
+                    transaction.transaction_date.date()
+                )
+                if exchange_rate:
+                    transaction.exchange_rate = exchange_rate
+                    transaction.base_amount = (
+                            transaction.quantity * transaction.price * exchange_rate
+                    )
+                    transaction.save(update_fields=['exchange_rate', 'base_amount'])
+                    updated_count += 1
+        except Exception as e:
+            logger.error(f"Failed to update transaction {transaction.id}: {e}")
+
+    logger.info(f"Updated base amounts for {updated_count} transactions")
+    return f"Updated {updated_count} transactions"
 
 
 @shared_task(bind=True, max_retries=3)

@@ -39,6 +39,18 @@ app.conf.beat_schedule = {
     },
 }
 
+app.conf.beat_schedule.update({
+    'update-exchange-rates-daily': {
+        'task': 'portfolio.tasks.update_exchange_rates',
+        'schedule': crontab(hour='6', minute='0'),  # Daily at 6 AM
+    },
+    'update-exchange-rates-hourly': {
+        'task': 'portfolio.tasks.update_exchange_rates',
+        'schedule': crontab(minute='0'),  # Every hour
+        'args': (['USD', 'EUR', 'GBP'], None)  # Update main currencies
+    },
+})
+
 @app.task(bind=True)
 def debug_task(self):
     print(f'Request: {self.request!r}')

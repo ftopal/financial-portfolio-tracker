@@ -4,9 +4,9 @@ from django.core.validators import MinValueValidator
 from decimal import Decimal
 from django.utils import timezone
 from django.db.models import Sum, F, Q, Case, When, DecimalField
+from .models_currency import Currency, ExchangeRate
 
 
-# Keep your existing Portfolio and AssetCategory models
 class Portfolio(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='portfolios')
     name = models.CharField(max_length=100)
@@ -299,6 +299,22 @@ class Transaction(models.Model):
     transaction_date = models.DateTimeField(default=timezone.now, db_index=True)
     settlement_date = models.DateTimeField(null=True, blank=True)
 
+    # Currency
+    currency = models.CharField(max_length=3, default='USD')
+    exchange_rate = models.DecimalField(
+        max_digits=20,
+        decimal_places=8,
+        default=Decimal('1'),
+        help_text="Exchange rate to portfolio base currency at transaction date"
+    )
+    base_amount = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Total value in portfolio base currency"
+    )
+
     # Amounts
     quantity = models.DecimalField(
         max_digits=20,
@@ -378,12 +394,22 @@ class Transaction(models.Model):
             raise ValidationError("Split ratio is required for stock split transactions.")
 
     def save(self, *args, **kwargs):
-        # Ensure dividend_per_share is set for dividends before saving
-        if self.transaction_type == 'DIVIDEND' and not self.dividend_per_share:
-            self.dividend_per_share = self.price
-
-        # Call clean to run validations
-        self.full_clean()
+        # Calculate base amount if not provided
+        if not self.base_amount and self.portfolio:
+            if self.currency == self.portfolio.currency:
+                self.base_amount = self.quantity * self.price
+                self.exchange_rate = Decimal('1')
+            else:
+                # Get exchange rate
+                from .services.currency_service import CurrencyService
+                rate = CurrencyService.get_exchange_rate(
+                    self.currency,
+                    self.portfolio.currency,
+                    self.transaction_date.date() if hasattr(self.transaction_date, 'date') else self.transaction_date
+                )
+                if rate:
+                    self.exchange_rate = rate
+                    self.base_amount = self.quantity * self.price * rate
 
         super().save(*args, **kwargs)
 
@@ -392,6 +418,7 @@ class PriceHistory(models.Model):
     """Historical price data for securities"""
     security = models.ForeignKey(Security, on_delete=models.CASCADE, related_name='price_history')
     date = models.DateTimeField(db_index=True)
+    currency = models.CharField(max_length=3, default='USD')
 
     # Price data
     open_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
@@ -489,6 +516,48 @@ class PortfolioCashAccount(models.Model):
     def has_sufficient_balance(self, amount):
         """Check if account has sufficient balance for a transaction"""
         return self.balance >= amount
+
+    def get_total_value_in_currency(self, target_currency=None):
+        """Get total portfolio value in specified currency"""
+        if target_currency is None:
+            target_currency = self.currency
+
+        from .services.currency_service import CurrencyService
+        return CurrencyService.get_portfolio_value_in_currency(self, target_currency)
+
+    def get_holdings_with_currency(self, target_currency=None):
+        """Get holdings with values converted to target currency"""
+        if target_currency is None:
+            target_currency = self.currency
+
+        holdings = self.get_holdings()
+
+        if target_currency == self.currency:
+            return holdings
+
+        from .services.currency_service import CurrencyService
+
+        # Convert values to target currency
+        for security_id, data in holdings.items():
+            security = data['security']
+            if security.currency != target_currency:
+                # Convert current value
+                data['current_value_converted'] = CurrencyService.convert_amount(
+                    data['current_value'],
+                    security.currency,
+                    target_currency
+                )
+                # Convert other monetary values
+                data['total_dividends_converted'] = CurrencyService.convert_amount(
+                    data['total_dividends'],
+                    security.currency,
+                    target_currency
+                )
+            else:
+                data['current_value_converted'] = data['current_value']
+                data['total_dividends_converted'] = data['total_dividends']
+
+        return holdings
 
     def update_balance(self, amount):
         """Update balance by amount (positive for deposits, negative for withdrawals)"""

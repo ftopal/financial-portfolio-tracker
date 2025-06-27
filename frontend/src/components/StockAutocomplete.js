@@ -1,3 +1,4 @@
+// frontend/src/components/StockAutocomplete.js - Fixed version
 import React, { useState, useEffect, useCallback } from 'react';
 import { Search, TrendingUp, AlertCircle } from 'lucide-react';
 import api from '../services/api';
@@ -16,6 +17,7 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
     debounce(async (query) => {
       if (!query || query.length < 1) {
         setSearchResults([]);
+        setError('');
         return;
       }
 
@@ -23,18 +25,21 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
       setError('');
 
       try {
+        console.log('Searching for:', query); // Debug log
         const response = await api.securities.search(query);
-        // The API returns an array directly, not response.data.results
+        console.log('Search response:', response); // Debug log
+
+        // The API returns an array directly
         const results = Array.isArray(response.data) ? response.data : [];
         setSearchResults(results);
 
-        // If no results in database, offer to search Yahoo Finance
+        // If no results in database, show import option
         if (results.length === 0) {
-          setError(`No results found. Try importing "${query.toUpperCase()}" from Yahoo Finance.`);
+          setError(`No results found. Click below to import "${query.toUpperCase()}" from Yahoo Finance.`);
         }
       } catch (err) {
         setError('Error searching stocks');
-        console.error(err);
+        console.error('Search error:', err);
         setSearchResults([]);
       } finally {
         setIsLoading(false);
@@ -44,7 +49,12 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
   );
 
   useEffect(() => {
-    searchStocks(searchTerm);
+    if (searchTerm) {
+      searchStocks(searchTerm);
+    } else {
+      setSearchResults([]);
+      setError('');
+    }
   }, [searchTerm, searchStocks]);
 
   const handleImportStock = async () => {
@@ -54,16 +64,20 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
     setError('');
 
     try {
+      console.log('Importing:', searchTerm); // Debug log
       const response = await api.securities.import(searchTerm);
+      console.log('Import response:', response); // Debug log
 
       if (response.data.security) {
         setSelectedStock(response.data.security);
         setSearchResults([response.data.security]);
         onSelectStock(response.data.security);
         setError('');
+        setShowDropdown(false);
       }
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to import stock');
+      console.error('Import error:', err);
+      setError(err.response?.data?.error || 'Failed to import stock. Please check the symbol and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -108,11 +122,16 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
             type="text"
             value={searchTerm}
             onChange={(e) => {
-              setSearchTerm(e.target.value.toUpperCase());
+              const value = e.target.value.toUpperCase();
+              setSearchTerm(value);
               setShowDropdown(true);
               setSelectedStock(null);
+              console.log('Search term changed:', value); // Debug log
             }}
-            onFocus={() => setShowDropdown(true)}
+            onFocus={() => {
+              setShowDropdown(true);
+              console.log('Input focused, showing dropdown'); // Debug log
+            }}
             placeholder="Search by symbol or name..."
             className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             required
@@ -144,15 +163,25 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
         </div>
       )}
 
-      {/* Dropdown */}
+      {/* Dropdown - Fixed visibility */}
       {showDropdown && searchTerm && !selectedStock && (
-        <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
-          {searchResults && searchResults.length > 0 ? (
+        <div
+          className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto"
+          style={{
+            zIndex: 9999,  // Ensure it's on top
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0
+          }}
+        >
+          {searchResults.length > 0 ? (
+            // Show search results
             searchResults.map((stock) => (
               <div
                 key={stock.id}
                 onClick={() => handleSelectStock(stock)}
-                className="px-4 py-3 hover:bg-gray-100 cursor-pointer border-b border-gray-100"
+                className="px-4 py-3 hover:bg-gray-100 cursor-pointer border-b border-gray-100 last:border-b-0"
               >
                 <div className="flex justify-between items-start">
                   <div>
@@ -160,7 +189,7 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
                       {stock.symbol} - {stock.name}
                     </p>
                     <p className="text-sm text-gray-500">
-                      {stock.exchange || 'N/A'} • {stock.security_type || stock.asset_type}
+                      {stock.exchange || 'N/A'} • {stock.security_type || stock.asset_type || 'STOCK'}
                     </p>
                   </div>
                   <div className="text-right">
@@ -170,27 +199,43 @@ const StockAutocomplete = ({ onSelectStock, assetType = 'STOCK' }) => {
               </div>
             ))
           ) : (
+            // Show import option when no results
             <div className="p-4">
-              {error && (
-                <div className="mb-3">
-                  <p className="text-sm text-gray-600 flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4" />
-                    {error}
-                  </p>
-                </div>
-              )}
-              {!isLoading && searchTerm && (
+              {/* Always show the search status */}
+              <div className="mb-3">
+                <p className="text-sm text-gray-600 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-yellow-500" />
+                  {isLoading ? 'Searching...' : `No results found for "${searchTerm}"`}
+                </p>
+              </div>
+
+              {/* Show import button when not loading and search term exists */}
+              {!isLoading && searchTerm.length >= 1 && (
                 <button
                   type="button"
                   onClick={handleImportStock}
-                  disabled={isLoading}
-                  className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium disabled:opacity-50"
+                  className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium transition-colors duration-200 flex items-center justify-center gap-2"
                 >
-                  {isLoading ? 'Importing...' : `Import ${searchTerm} from Yahoo Finance`}
+                  <TrendingUp className="w-4 h-4" />
+                  Import {searchTerm} from Yahoo Finance
                 </button>
+              )}
+
+              {/* Show error if import failed */}
+              {error && !isLoading && (
+                <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded">
+                  <p className="text-sm text-red-600">{error}</p>
+                </div>
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Debug info - remove in production */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="mt-2 text-xs text-gray-500">
+          Debug: showDropdown={showDropdown.toString()}, searchTerm="{searchTerm}", resultsCount={searchResults.length}
         </div>
       )}
     </div>

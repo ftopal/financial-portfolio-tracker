@@ -172,6 +172,16 @@ USE_I18N = True
 
 USE_TZ = True
 
+# Currency settings
+DEFAULT_CURRENCY = 'USD'
+SUPPORTED_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'HKD', 'SGD', 'INR', 'BRL']
+
+# Exchange rate API configuration
+EXCHANGE_RATE_PROVIDER = 'portfolio.services.currency_service.ExchangeRateAPIProvider'
+EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY')
+
+# Cache timeout for exchange rates (in seconds)
+EXCHANGE_RATE_CACHE_TIMEOUT = 3600  # 1 hour
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/

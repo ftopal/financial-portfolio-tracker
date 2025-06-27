@@ -1,5 +1,6 @@
 from django.contrib import admin
 from .models import *
+from .models_currency import Currency, ExchangeRate
 
 @admin.register(AssetCategory)
 class AssetCategoryAdmin(admin.ModelAdmin):
@@ -138,3 +139,18 @@ class UserPreferencesAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+@admin.register(Currency)
+class CurrencyAdmin(admin.ModelAdmin):
+    list_display = ['code', 'name', 'symbol', 'decimal_places', 'is_active']
+    list_filter = ['is_active']
+    search_fields = ['code', 'name']
+    ordering = ['code']
+
+@admin.register(ExchangeRate)
+class ExchangeRateAdmin(admin.ModelAdmin):
+    list_display = ['from_currency', 'to_currency', 'rate', 'date', 'source']
+    list_filter = ['from_currency', 'to_currency', 'source', 'date']
+    search_fields = ['from_currency', 'to_currency']
+    date_hierarchy = 'date'
+    ordering = ['-date', 'from_currency', 'to_currency']

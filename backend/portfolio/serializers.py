@@ -4,6 +4,27 @@ from .models import (
     PriceHistory, RealEstateAsset, User, PortfolioCashAccount, CashTransaction, UserPreferences
 )
 from decimal import Decimal
+from rest_framework import serializers
+from .models import Currency, ExchangeRate
+
+
+class CurrencySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Currency
+        fields = ['code', 'name', 'symbol', 'decimal_places']
+
+
+class ExchangeRateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExchangeRate
+        fields = ['from_currency', 'to_currency', 'rate', 'date', 'source']
+
+
+class CurrencyConversionSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=20, decimal_places=8)
+    from_currency = serializers.CharField(max_length=3)
+    to_currency = serializers.CharField(max_length=3)
+    date = serializers.DateField(required=False)
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -38,6 +59,17 @@ class TransactionSerializer(serializers.ModelSerializer):
     security_name = serializers.ReadOnlyField(source='security.name')
     portfolio_name = serializers.ReadOnlyField(source='portfolio.name')
     total_value = serializers.ReadOnlyField()
+    currency = serializers.CharField(max_length=3, required=False)
+    exchange_rate = serializers.DecimalField(
+        max_digits=20,
+        decimal_places=8,
+        read_only=True
+    )
+    base_amount = serializers.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        read_only=True
+    )
 
     class Meta:
         model = Transaction
@@ -45,13 +77,32 @@ class TransactionSerializer(serializers.ModelSerializer):
             'id', 'portfolio', 'portfolio_name', 'security', 'security_symbol',
             'security_name', 'transaction_type', 'transaction_date', 'quantity',
             'price', 'fees', 'total_value', 'dividend_per_share', 'notes',
-            'created_at'
+            'created_at', 'currency', 'exchange_rate', 'base_amount'
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
 
     def create(self, validated_data):
-        # Auto-set user from request
-        validated_data['user'] = self.context['request'].user
+        # Get currency from validated data or use security's currency
+        currency = validated_data.get('currency')
+        if not currency and 'security' in validated_data:
+            currency = validated_data['security'].currency
+            validated_data['currency'] = currency
+
+        # Calculate exchange rate if currency differs from portfolio currency
+        portfolio = validated_data['portfolio']
+        if currency and currency != portfolio.currency:
+            from .services.currency_service import CurrencyService
+            exchange_rate = CurrencyService.get_exchange_rate(
+                currency,
+                portfolio.currency,
+                validated_data.get('transaction_date', timezone.now()).date()
+            )
+            if exchange_rate:
+                validated_data['exchange_rate'] = exchange_rate
+                # Calculate base amount
+                total_amount = validated_data['quantity'] * validated_data['price']
+                validated_data['base_amount'] = total_amount * exchange_rate
+
         return super().create(validated_data)
 
 

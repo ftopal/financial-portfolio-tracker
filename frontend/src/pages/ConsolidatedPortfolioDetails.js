@@ -116,6 +116,14 @@ const ConsolidatedPortfolioDetails = () => {
     });
   };
 
+  const getHoldingsMap = () => {
+  const holdings = {};
+  consolidatedAssets.forEach(asset => {
+    holdings[asset.symbol] = asset.total_quantity;
+  });
+  return holdings;
+};
+
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -424,6 +432,7 @@ const ConsolidatedPortfolioDetails = () => {
         portfolioId={portfolioId}
         security={selectedSecurity}
         onSuccess={handleTransactionSuccess}
+        existingHoldings={getHoldingsMap()}
       />
     </div>
   );
