@@ -366,17 +366,18 @@ class Transaction(models.Model):
         elif self.transaction_type == 'SELL':
             return (self.quantity * self.price) - self.fees
         elif self.transaction_type == 'DIVIDEND':
-            # Use dividend_per_share if available, otherwise calculate from price
             if self.dividend_per_share:
                 return self.quantity * self.dividend_per_share
             elif self.price and self.quantity:
-                # Price contains total dividend amount
                 return self.price
+            return Decimal('0')
+        elif self.transaction_type == 'SPLIT':
+            # Stock splits don't have monetary value
             return Decimal('0')
         elif self.transaction_type == 'FEE':
             return -self.fees
         elif self.transaction_type == 'INTEREST':
-            return self.quantity  # Quantity represents the interest amount
+            return self.quantity
         return Decimal('0')
 
     def clean(self):
@@ -398,9 +399,14 @@ class Transaction(models.Model):
             elif not self.dividend_per_share:
                 raise ValidationError("Dividend per share or price is required for dividend transactions.")
 
-        # Validate split ratio
-        if self.transaction_type == 'SPLIT' and not self.split_ratio:
-            raise ValidationError("Split ratio is required for stock split transactions.")
+        # Validate stock split fields
+        if self.transaction_type == 'SPLIT':
+            if not self.split_ratio:
+                raise ValidationError("Split ratio is required for stock split transactions.")
+            # Validate split ratio format (e.g., "2:1", "3:2")
+            import re
+            if not re.match(r'^\d+:\d+$', self.split_ratio):
+                raise ValidationError("Split ratio must be in format 'X:Y' (e.g., '2:1')")
 
     def save(self, *args, **kwargs):
         # Calculate base amount if not provided
@@ -586,6 +592,7 @@ class CashTransaction(models.Model):
         ('FEE', 'Fee'),
         ('TRANSFER_IN', 'Transfer In'),
         ('TRANSFER_OUT', 'Transfer Out'),
+        ('SPLIT', 'Stock Split'),
     ]
 
     # Relationships

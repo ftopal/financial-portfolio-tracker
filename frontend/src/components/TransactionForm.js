@@ -248,9 +248,10 @@ const TransactionForm = ({
       security: selectedSecurity.id,
       ...formData,
       quantity: parseFloat(formData.quantity),
-      price: parseFloat(formData.price),
+      price: parseFloat(formData.price || 0),
       fees: parseFloat(formData.fees || 0),
-      currency: formData.currency
+      currency: formData.currency,
+      split_ratio: formData.transaction_type === 'SPLIT' ? formData.split_ratio : undefined
     };
 
     if (transaction) {
@@ -272,10 +273,14 @@ const TransactionForm = ({
 
   const totalAmount = formData.transaction_type === 'DIVIDEND'
     ? parseFloat(formData.price || 0)  // For dividends, price IS the total amount
+    : formData.transaction_type === 'SPLIT'
+    ? 0  // Splits have no monetary value
     : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);  // For buy/sell, multiply
 
   const totalWithFees = formData.transaction_type === 'DIVIDEND'
     ? totalAmount + parseFloat(formData.fees || 0)  // Dividends: add fees to total dividend
+    : formData.transaction_type === 'SPLIT'
+    ? 0  // Splits have no fees or monetary value
     : formData.transaction_type === 'BUY'
       ? totalAmount + parseFloat(formData.fees || 0)  // Buy: add fees
       : totalAmount - parseFloat(formData.fees || 0); // Sell: subtract fees
@@ -435,7 +440,10 @@ const TransactionForm = ({
                     // Auto-fill quantity when switching to DIVIDEND
                     quantity: newType === 'DIVIDEND' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
                       ? portfolioHoldings[selectedSecurity.symbol].toString()
-                      : prev.quantity
+                      : prev.quantity,
+                    // Clear price for splits as they don't have monetary value
+                    price: newType === 'SPLIT' ? '0' : prev.price,
+                    fees: newType === 'SPLIT' ? '0' : prev.fees
                   }));
                 }}
                 label="Transaction Type"
@@ -443,6 +451,7 @@ const TransactionForm = ({
                 <MenuItem value="BUY">Buy</MenuItem>
                 <MenuItem value="SELL">Sell</MenuItem>
                 <MenuItem value="DIVIDEND">Dividend</MenuItem>
+                <MenuItem value="SPLIT">Stock Split</MenuItem>
               </Select>
             </FormControl>
 
@@ -456,9 +465,26 @@ const TransactionForm = ({
               required
             />
 
+            {formData.transaction_type === 'SPLIT' && (
+              <TextField
+                type="text"
+                label="Split Ratio (e.g., 2:1)"
+                value={formData.split_ratio || ''}
+                onChange={(e) => setFormData({ ...formData, split_ratio: e.target.value })}
+                fullWidth
+                required
+                helperText="Format: new:old (e.g., 2:1 means each share becomes 2 shares)"
+                placeholder="2:1"
+              />
+            )}
+
             <TextField
               type="number"
-              label={formData.transaction_type === 'DIVIDEND' ? 'Number of Shares' : 'Quantity'}
+              label={
+                formData.transaction_type === 'DIVIDEND' ? 'Number of Shares' :
+                formData.transaction_type === 'SPLIT' ? 'Additional Shares Received' :
+                'Quantity'
+              }
               value={formData.quantity}
               onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
               inputProps={{ step: "0.00000001", min: "0" }}
@@ -467,30 +493,34 @@ const TransactionForm = ({
               helperText={
                 formData.transaction_type === 'DIVIDEND' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
                   ? `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares`
+                  : formData.transaction_type === 'SPLIT' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
+                  ? `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares. Enter how many NEW shares you received.`
                   : ''
               }
             />
 
-            <TextField
-              type="number"
-              label={formData.transaction_type === 'DIVIDEND' ? 'Total Dividend Amount' : 'Price per Unit'}
-              value={formData.price}
-              onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-              inputProps={{ step: "0.00000001", min: "0" }}
-              fullWidth
-              required
-              helperText={
-                formData.transaction_type === 'DIVIDEND'
-                  ? formData.quantity && formData.price
-                    ? <span>Dividend per share: <CurrencyDisplay
-                        amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
-                        currency={formData.currency}
-                        showCode={false}
-                      /></span>
-                    : 'Enter the total dividend amount received'
-                  : ''
-              }
-            />
+            {formData.transaction_type !== 'SPLIT' && (
+              <TextField
+                type="number"
+                label={formData.transaction_type === 'DIVIDEND' ? 'Total Dividend Amount' : 'Price per Unit'}
+                value={formData.price}
+                onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                inputProps={{ step: "0.00000001", min: "0" }}
+                fullWidth
+                required
+                helperText={
+                  formData.transaction_type === 'DIVIDEND'
+                    ? formData.quantity && formData.price
+                      ? <span>Dividend per share: <CurrencyDisplay
+                          amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
+                          currency={formData.currency}
+                          showCode={false}
+                        /></span>
+                      : 'Enter the total dividend amount received'
+                    : ''
+                }
+              />
+            )}
 
             <CurrencySelector
               value={formData.currency}
@@ -499,14 +529,16 @@ const TransactionForm = ({
               label="Transaction Currency"
             />
 
-            <TextField
-              type="number"
-              label="Fees"
-              value={formData.fees}
-              onChange={(e) => setFormData({ ...formData, fees: e.target.value })}
-              inputProps={{ step: "0.01", min: "0" }}
-              fullWidth
-            />
+            {formData.transaction_type !== 'SPLIT' && (
+              <TextField
+                type="number"
+                label="Fees"
+                value={formData.fees}
+                onChange={(e) => setFormData({ ...formData, fees: e.target.value })}
+                inputProps={{ step: "0.01", min: "0" }}
+                fullWidth
+              />
+            )}
           </Box>
 
           <TextField
@@ -525,63 +557,81 @@ const TransactionForm = ({
               Transaction Summary
             </Typography>
 
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-              <Typography variant="body2">Subtotal:</Typography>
-              <CurrencyDisplay
-                amount={totalAmount}
-                currency={formData.currency}
-                showCode={true}
-              />
-            </Box>
-
-            {formData.transaction_type === 'DIVIDEND' && formData.quantity && formData.price && (
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                <Typography variant="body2">Dividend per share:</Typography>
-                <CurrencyDisplay
-                  amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
-                  currency={formData.currency}
-                  showCode={true}
-                />
-              </Box>
-            )}
-
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-              <Typography variant="body2">Fees:</Typography>
-              <CurrencyDisplay
-                amount={parseFloat(formData.fees || 0)}
-                currency={formData.currency}
-                showCode={true}
-              />
-            </Box>
-
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-              <Typography variant="body2" fontWeight="bold">Total:</Typography>
-              <Typography variant="body2" fontWeight="bold">
-                <CurrencyDisplay
-                  amount={totalWithFees}
-                  currency={formData.currency}
-                  showCode={true}
-                />
-              </Typography>
-            </Box>
-
-            {portfolio && formData.currency !== portfolio.currency && convertedAmount && (
+            {formData.transaction_type === 'SPLIT' ? (
               <>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
-                  <Typography variant="body2" color="text.secondary">
-                    Portfolio Currency ({portfolio.currency}):
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="body2">Split Ratio:</Typography>
+                  <Typography variant="body2">{formData.split_ratio || 'Not specified'}</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="body2">New Shares to be Added:</Typography>
+                  <Typography variant="body2">{formData.quantity || 0}</Typography>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  No cash impact for stock splits
+                </Typography>
+              </>
+            ) : (
+              <>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="body2">Subtotal:</Typography>
+                  <CurrencyDisplay
+                    amount={totalAmount}
+                    currency={formData.currency}
+                    showCode={true}
+                  />
+                </Box>
+
+                {formData.transaction_type === 'DIVIDEND' && formData.quantity && formData.price && (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="body2">Dividend per share:</Typography>
                     <CurrencyDisplay
-                      amount={convertedAmount}
-                      currency={portfolio.currency}
+                      amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
+                      currency={formData.currency}
+                      showCode={true}
+                    />
+                  </Box>
+                )}
+
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="body2">Fees:</Typography>
+                  <CurrencyDisplay
+                    amount={parseFloat(formData.fees || 0)}
+                    currency={formData.currency}
+                    showCode={true}
+                  />
+                </Box>
+
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="body2" fontWeight="bold">Total:</Typography>
+                  <Typography variant="body2" fontWeight="bold">
+                    <CurrencyDisplay
+                      amount={totalWithFees}
+                      currency={formData.currency}
                       showCode={true}
                     />
                   </Typography>
                 </Box>
-                <Typography variant="caption" color="text.secondary">
-                  Exchange Rate: 1 {formData.currency} = {exchangeRate?.toFixed(4)} {portfolio.currency}
-                </Typography>
+
+                {portfolio && formData.currency !== portfolio.currency && convertedAmount && (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
+                      <Typography variant="body2" color="text.secondary">
+                        Portfolio Currency ({portfolio.currency}):
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        <CurrencyDisplay
+                          amount={convertedAmount}
+                          currency={portfolio.currency}
+                          showCode={true}
+                        />
+                      </Typography>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary">
+                      Exchange Rate: 1 {formData.currency} = {exchangeRate?.toFixed(4)} {portfolio.currency}
+                    </Typography>
+                  </>
+                )}
               </>
             )}
           </Box>
