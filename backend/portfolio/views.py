@@ -22,6 +22,9 @@ from .serializers import (
 )
 from .services.security_import_service import SecurityImportService
 from .services.currency_service import CurrencyService
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CurrencyViewSet(viewsets.ReadOnlyModelViewSet):
@@ -586,6 +589,38 @@ class TransactionViewSet(viewsets.ModelViewSet):
             )
             cash_account.update_balance(dividend_amount)
 
+    def perform_destroy(self, instance):
+        """Override to handle cash transaction cleanup when deleting a transaction"""
+
+        # Store the transaction details for logging
+        transaction_type = instance.transaction_type
+        security_symbol = instance.security.symbol
+
+        # Check if there's a related cash transaction
+        if hasattr(instance, 'cash_transaction'):
+            cash_transaction = instance.cash_transaction
+            cash_account = cash_transaction.cash_account
+
+            # Reverse the cash balance change
+            # The amount in cash_transaction is negative for outflows (BUY)
+            # and positive for inflows (SELL, DIVIDEND)
+            reversal_amount = -cash_transaction.amount
+
+            # Update the cash balance
+            cash_account.update_balance(reversal_amount)
+
+            # Delete the cash transaction
+            # This will happen automatically due to CASCADE when we delete the transaction
+            # but we can do it explicitly for clarity
+            cash_transaction.delete()
+
+            # Log the action
+            print(f"Deleted {transaction_type} transaction for {security_symbol}, "
+                  f"reversed cash amount: {reversal_amount}")
+
+        # Delete the transaction itself
+        super().perform_destroy(instance)
+
 
 class AssetCategoryViewSet(viewsets.ModelViewSet):
     queryset = AssetCategory.objects.all()
@@ -625,6 +660,21 @@ class CashTransactionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy to prevent deletion of auto-generated cash transactions"""
+        instance = self.get_object()
+
+        # Check if this cash transaction is related to a security transaction
+        if instance.related_transaction:
+            return Response(
+                {'error': 'Cannot delete cash transactions that are linked to security transactions. '
+                          'Please delete the security transaction instead.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Allow deletion of manual cash transactions (deposits/withdrawals)
+        return super().destroy(request, *args, **kwargs)
 
 
 class UserPreferencesViewSet(viewsets.ModelViewSet):

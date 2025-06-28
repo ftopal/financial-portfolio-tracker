@@ -199,7 +199,18 @@ const TransactionForm = ({
 
   const fetchExchangeRate = useCallback(async () => {
     try {
-      const amount = parseFloat(formData.price) * parseFloat(formData.quantity);
+      // Calculate amount based on transaction type
+      const amount = formData.transaction_type === 'DIVIDEND'
+        ? parseFloat(formData.price || 0)  // For dividends, use the total amount directly
+        : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);  // For buy/sell, multiply
+
+      // Don't proceed if amount is 0 or invalid
+      if (!amount || amount === 0) {
+        setExchangeRate(null);
+        setConvertedAmount(null);
+        return;
+      }
+
       const response = await api.currencies.convert({
         amount: amount,
         from_currency: formData.currency,
@@ -214,7 +225,7 @@ const TransactionForm = ({
       setExchangeRate(null);
       setConvertedAmount(null);
     }
-  }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, portfolio]);
+  }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, formData.transaction_type, portfolio]);
 
   // Calculate exchange rate when currency changes
   useEffect(() => {
@@ -259,8 +270,15 @@ const TransactionForm = ({
   }
 };
 
-  const totalAmount = parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);
-  const totalWithFees = totalAmount + parseFloat(formData.fees || 0);
+  const totalAmount = formData.transaction_type === 'DIVIDEND'
+    ? parseFloat(formData.price || 0)  // For dividends, price IS the total amount
+    : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);  // For buy/sell, multiply
+
+  const totalWithFees = formData.transaction_type === 'DIVIDEND'
+    ? totalAmount + parseFloat(formData.fees || 0)  // Dividends: add fees to total dividend
+    : formData.transaction_type === 'BUY'
+      ? totalAmount + parseFloat(formData.fees || 0)  // Buy: add fees
+      : totalAmount - parseFloat(formData.fees || 0); // Sell: subtract fees
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
