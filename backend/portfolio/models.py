@@ -41,15 +41,12 @@ class Portfolio(models.Model):
             )
 
     def get_holdings(self):
-        """Calculate current holdings from transactions"""
-        from django.db.models import Sum, F, Q, DecimalField
-        from decimal import Decimal
-
-        # Get all transactions for this portfolio
+        """Calculate current holdings based on transactions"""
         holdings = {}
 
-        # Aggregate transactions by security
-        transactions = self.transactions.select_related('security').order_by('transaction_date')
+        transactions = self.transactions.filter(
+            transaction_type__in=['BUY', 'SELL', 'DIVIDEND', 'SPLIT']  # Add SPLIT here
+        ).select_related('security').order_by('transaction_date')
 
         for transaction in transactions:
             security_id = transaction.security.id
@@ -109,11 +106,38 @@ class Portfolio(models.Model):
                 # Subtract from net cash invested (money in)
                 holdings[security_id]['net_cash_invested'] -= transaction.total_value
 
+            # ADD THIS NEW SECTION FOR SPLITS
+            elif transaction.transaction_type == 'SPLIT':
+                # Parse split ratio
+                if transaction.split_ratio:
+                    try:
+                        # Split ratio format: "new:old" (e.g., "2:1")
+                        new_shares, old_shares = map(int, transaction.split_ratio.split(':'))
+                        multiplier = Decimal(new_shares) / Decimal(old_shares)
+
+                        # Add the new shares received
+                        # The quantity field contains the additional shares received
+                        holdings[security_id]['quantity'] += transaction.quantity
+
+                        # Adjust the price per share for all buy lots
+                        # This maintains the correct cost basis for tax purposes
+                        for lot in holdings[security_id]['buy_lots']:
+                            # Reduce the price per share
+                            lot['price'] = lot['price'] / multiplier
+                            # Increase the quantity in each lot
+                            lot['remaining'] = lot['remaining'] * multiplier
+
+                        # Note: net_cash_invested stays the same (no money in/out)
+                        # The average cost will be recalculated automatically below
+
+                    except (ValueError, ZeroDivisionError) as e:
+                        # Log error but continue processing
+                        print(f"Error processing split ratio {transaction.split_ratio}: {e}")
+
         # Calculate current metrics for each holding
         for security_id, data in holdings.items():
             if data['quantity'] > 0:
                 # Calculate average cost based on net cash invested
-                # This is your method: (Total Paid - Dividends Received - Sell Proceeds) / Current Shares
                 if data['quantity'] > 0:
                     data['avg_cost'] = data['net_cash_invested'] / data['quantity']
                     # Ensure average cost doesn't go negative
@@ -129,7 +153,7 @@ class Portfolio(models.Model):
                 data['unrealized_gains'] = data['current_value'] - data['net_cash_invested']
                 data['total_gains'] = data['realized_gains'] + data['unrealized_gains']
 
-            # Filter out positions with 0 quantity
+        # Filter out positions with 0 quantity
         return {k: v for k, v in holdings.items() if v['quantity'] > 0}
 
     def get_total_value(self):

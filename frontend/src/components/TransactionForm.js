@@ -1,5 +1,3 @@
-// frontend/src/components/TransactionForm.js - Updated with MUI Autocomplete + Yahoo Import
-
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Dialog,
@@ -18,8 +16,10 @@ import {
   Autocomplete,
   CircularProgress,
   Paper,
-  InputAdornment
+  InputAdornment,
+  Tooltip
 } from '@mui/material';
+import InfoIcon from '@mui/icons-material/Info';
 import { Search as SearchIcon, TrendingUp } from '@mui/icons-material';
 import CurrencySelector from './CurrencySelector';
 import CurrencyDisplay from './CurrencyDisplay';
@@ -236,6 +236,39 @@ const TransactionForm = ({
       setConvertedAmount(null);
     }
   }, [formData.currency, formData.price, formData.quantity, portfolio, fetchExchangeRate]);
+
+  // Auto-calculate additional shares when split ratio changes
+  useEffect(() => {
+    if (formData.transaction_type === 'SPLIT' && formData.split_ratio && selectedSecurity) {
+      try {
+        // Parse the split ratio (e.g., "2:1" means 2 new shares for every 1 old share)
+        const [newShares, oldShares] = formData.split_ratio.split(':').map(Number);
+
+        if (!isNaN(newShares) && !isNaN(oldShares) && oldShares > 0) {
+          // Get current holdings for this security
+          const currentHolding = portfolioHoldings[selectedSecurity.symbol] || 0;
+
+          if (currentHolding > 0) {
+            // Calculate total shares after split
+            const totalSharesAfterSplit = (currentHolding * newShares) / oldShares;
+            // Additional shares = total after split - current holdings
+            const additionalShares = totalSharesAfterSplit - currentHolding;
+
+            // Only update if the calculated value is different from current value
+            // This prevents overwriting manual edits unless the ratio changes
+            if (additionalShares >= 0 && additionalShares !== parseFloat(formData.quantity)) {
+              setFormData(prev => ({
+                ...prev,
+                quantity: additionalShares.toFixed(8) // Use 8 decimal places for precision
+              }));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error calculating split shares:', error);
+      }
+    }
+  }, [formData.split_ratio, formData.transaction_type, selectedSecurity, portfolioHoldings]);
 
   const handleSubmit = async (e) => {
   e.preventDefault();
@@ -466,16 +499,43 @@ const TransactionForm = ({
             />
 
             {formData.transaction_type === 'SPLIT' && (
-              <TextField
-                type="text"
-                label="Split Ratio (e.g., 2:1)"
-                value={formData.split_ratio || ''}
-                onChange={(e) => setFormData({ ...formData, split_ratio: e.target.value })}
-                fullWidth
-                required
-                helperText="Format: new:old (e.g., 2:1 means each share becomes 2 shares)"
-                placeholder="2:1"
-              />
+              <>
+                <TextField
+                  type="text"
+                  label="Split Ratio (e.g., 2:1)"
+                  value={formData.split_ratio || ''}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    // Allow only numbers, colons, and spaces
+                    if (/^[\d\s:]*$/.test(value)) {
+                      setFormData({ ...formData, split_ratio: value.replace(/\s/g, '') });
+                    }
+                  }}
+                  fullWidth
+                  required
+                  helperText={
+                    selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
+                      ? `Format: new:old (e.g., 2:1). You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares.`
+                      : "Format: new:old (e.g., 2:1 means each share becomes 2 shares)"
+                  }
+                  placeholder="2:1"
+                  error={formData.split_ratio && !/^\d+:\d+$/.test(formData.split_ratio)}
+                />
+
+                {/* Show calculation preview */}
+                {formData.split_ratio && /^\d+:\d+$/.test(formData.split_ratio) &&
+                 selectedSecurity && portfolioHoldings[selectedSecurity.symbol] > 0 && (
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                    Split calculation: {portfolioHoldings[selectedSecurity.symbol]} shares × {formData.split_ratio} = {
+                      (() => {
+                        const [newShares, oldShares] = formData.split_ratio.split(':').map(Number);
+                        const total = (portfolioHoldings[selectedSecurity.symbol] * newShares) / oldShares;
+                        return `${total} total shares (${total - portfolioHoldings[selectedSecurity.symbol]} new shares)`;
+                      })()
+                    }
+                  </Typography>
+                )}
+              </>
             )}
 
             <TextField
@@ -494,9 +554,21 @@ const TransactionForm = ({
                 formData.transaction_type === 'DIVIDEND' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
                   ? `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares`
                   : formData.transaction_type === 'SPLIT' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
-                  ? `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares. Enter how many NEW shares you received.`
+                  ? formData.split_ratio && /^\d+:\d+$/.test(formData.split_ratio)
+                    ? '✓ Auto-calculated from split ratio. You can edit if needed.'
+                    : `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares. Enter split ratio above to auto-calculate.`
                   : ''
               }
+              // Add visual indicator that it's auto-calculated
+              InputProps={formData.transaction_type === 'SPLIT' && formData.split_ratio ? {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Tooltip title="Auto-calculated from split ratio. You can still edit this value.">
+                      <InfoIcon color="action" fontSize="small" />
+                    </Tooltip>
+                  </InputAdornment>
+                ),
+              } : undefined}
             />
 
             {formData.transaction_type !== 'SPLIT' && (
@@ -561,12 +633,36 @@ const TransactionForm = ({
               <>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography variant="body2">Split Ratio:</Typography>
-                  <Typography variant="body2">{formData.split_ratio || 'Not specified'}</Typography>
+                  <Typography variant="body2" fontWeight="bold">
+                    {formData.split_ratio || 'Not specified'}
+                  </Typography>
                 </Box>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2">New Shares to be Added:</Typography>
-                  <Typography variant="body2">{formData.quantity || 0}</Typography>
-                </Box>
+
+                {selectedSecurity && portfolioHoldings[selectedSecurity.symbol] > 0 && (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="body2">Current Shares:</Typography>
+                      <Typography variant="body2">
+                        {portfolioHoldings[selectedSecurity.symbol]}
+                      </Typography>
+                    </Box>
+
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="body2">Additional Shares:</Typography>
+                      <Typography variant="body2" fontWeight="bold">
+                        +{formData.quantity || 0}
+                      </Typography>
+                    </Box>
+
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
+                      <Typography variant="body2" fontWeight="bold">Total After Split:</Typography>
+                      <Typography variant="body2" fontWeight="bold" color="primary">
+                        {parseFloat(portfolioHoldings[selectedSecurity.symbol] || 0) + parseFloat(formData.quantity || 0)}
+                      </Typography>
+                    </Box>
+                  </>
+                )}
+
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                   No cash impact for stock splits
                 </Typography>

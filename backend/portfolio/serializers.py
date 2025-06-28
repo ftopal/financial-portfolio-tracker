@@ -77,7 +77,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             'id', 'portfolio', 'portfolio_name', 'security', 'security_symbol',
             'security_name', 'transaction_type', 'transaction_date', 'quantity',
             'price', 'fees', 'total_value', 'dividend_per_share', 'notes',
-            'created_at', 'currency', 'exchange_rate', 'base_amount'
+            'created_at', 'currency', 'exchange_rate', 'base_amount', 'split_ratio'
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
 

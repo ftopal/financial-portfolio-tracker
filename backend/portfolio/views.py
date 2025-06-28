@@ -517,6 +517,10 @@ class TransactionViewSet(viewsets.ModelViewSet):
         # Handle cash flow based on transaction type
         cash_account = transaction.portfolio.cash_account
 
+        # Skip cash transactions for splits - they don't involve money
+        if transaction.transaction_type == 'SPLIT':
+            return
+
         # Check if cash transaction already exists
         if hasattr(transaction, 'cash_transaction'):
             return  # Cash transaction already exists, skip
