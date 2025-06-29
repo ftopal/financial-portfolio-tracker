@@ -180,6 +180,14 @@ SUPPORTED_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 
 EXCHANGE_RATE_PROVIDER = 'portfolio.services.currency_service.ExchangeRateAPIProvider'
 EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY')
 
+# Cache configuration for exchange rates
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'cache_table',
+    }
+}
+
 # Cache timeout for exchange rates (in seconds)
 EXCHANGE_RATE_CACHE_TIMEOUT = 3600  # 1 hour
 

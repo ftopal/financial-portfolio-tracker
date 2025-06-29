@@ -48,12 +48,27 @@ API.interceptors.response.use(
   }
 );
 
-// Currency endpoints
-API.currencies = {
-  getAll: () => api.get('/api/currencies/'),
-  convert: (data) => api.post('/api/currencies/convert/', data),
-  updateRates: () => api.post('/api/currencies/update_rates/'),
-  getExchangeRates: (params) => api.get('/api/exchange-rates/', { params }),
+// Currency-related endpoints grouped together
+export const currencyAPI = {
+  // Basic currency operations
+  list: () => API.get('currencies/'),
+  get: (code) => API.get(`currencies/${code}/`),
+  convert: (data) => API.post('currencies/convert/', data),
+  updateRates: () => API.post('currencies/update_rates/'),
+
+  // Exchange rate operations
+  exchangeRates: {
+    list: (params) => API.get('exchange-rates/', { params }),
+    get: (id) => API.get(`exchange-rates/${id}/`),
+    latest: (fromCurrency, toCurrency) =>
+      API.get('exchange-rates/', {
+        params: {
+          from_currency: fromCurrency,
+          to_currency: toCurrency,
+          limit: 1
+        }
+      }),
+  }
 };
 
 API.userPreferences = {
@@ -109,13 +124,18 @@ export const portfolioAPI = {
   depositCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/deposit_cash/`, data),
   withdrawCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/withdraw_cash/`, data),
   getCashHistory: (portfolioId) => API.get(`portfolios/${portfolioId}/cash_history/`),
-  getValueInCurrency: (id, currency) =>
-    api.get(`/api/portfolios/${id}/value/`, { params: { currency } }),
 
-  getCurrencyExposure: (id, currency = null) =>
-    api.get(`/api/portfolios/${id}/currency_exposure/`, {
-      params: currency ? { currency } : {}
-    }),
+  // Currency-related portfolio operations
+  getValueInCurrency: (id, currency, date = null) => {
+    const params = { currency };
+    if (date) params.date = date;
+    return API.get(`portfolios/${id}/value/`, { params });
+  },
+
+  getCurrencyExposure: (id, targetCurrency = null) => {
+    const params = targetCurrency ? { currency: targetCurrency } : {};
+    return API.get(`portfolios/${id}/currency_exposure/`, { params });
+  },
 };
 
 // Cash Transaction services (NEW)

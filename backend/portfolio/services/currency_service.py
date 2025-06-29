@@ -167,10 +167,7 @@ class CurrencyService:
 
     @classmethod
     def get_currency_exposure(cls, portfolio):
-        """
-        Calculate portfolio exposure by currency
-        Returns dict with currency codes as keys and exposure amounts as values
-        """
+        """Calculate portfolio exposure by currency"""
         exposure = {}
 
         # Get holdings
@@ -181,17 +178,16 @@ class CurrencyService:
             quantity = holding_data['quantity']
             current_value = security.current_price * quantity
 
-            currency = security.currency
-            if currency not in exposure:
-                exposure[currency] = Decimal('0')
-            exposure[currency] += current_value
+            if security.currency not in exposure:
+                exposure[security.currency] = Decimal('0')
+            exposure[security.currency] += current_value
 
-        # Add cash
+        # Add cash balance
         if hasattr(portfolio, 'cash_account'):
-            currency = portfolio.cash_account.currency
-            if currency not in exposure:
-                exposure[currency] = Decimal('0')
-            exposure[currency] += portfolio.cash_account.balance
+            cash_currency = portfolio.cash_account.currency
+            if cash_currency not in exposure:
+                exposure[cash_currency] = Decimal('0')
+            exposure[cash_currency] += portfolio.cash_account.balance
 
         return exposure
 

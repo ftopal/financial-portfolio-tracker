@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import api from '../services/api';
 import StockAutocomplete from '../components/StockAutocomplete';
 
+
 const PortfolioDetails = () => {
   const { portfolioId } = useParams();
   const [portfolio, setPortfolio] = useState(null);

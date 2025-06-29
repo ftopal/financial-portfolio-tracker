@@ -15,7 +15,7 @@ router.register(r'transactions', TransactionViewSet, basename='transaction')
 #router.register(r'real-estate', RealEstateAssetViewSet, basename='real-estate')
 router.register(r'cash-transactions', CashTransactionViewSet, basename='cash-transaction')
 router.register(r'preferences', UserPreferencesViewSet, basename='preferences')
-router.register(r'currencies', CurrencyViewSet)
+router.register(r'currencies', CurrencyViewSet, basename='currency')
 router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchangerate')
 
 urlpatterns = [

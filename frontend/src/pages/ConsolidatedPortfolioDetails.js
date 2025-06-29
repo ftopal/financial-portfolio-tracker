@@ -5,6 +5,7 @@ import api from '../services/api';
 import StockAutocomplete from '../components/StockAutocomplete';
 import CashManagement from '../components/CashManagement';
 import TransactionForm from '../components/TransactionForm';
+import PortfolioCurrencyView from '../components/PortfolioCurrencyView';
 
 const ConsolidatedPortfolioDetails = () => {
   const { portfolioId } = useParams();
@@ -117,12 +118,12 @@ const ConsolidatedPortfolioDetails = () => {
   };
 
   const getHoldingsMap = () => {
-  const holdings = {};
-  consolidatedAssets.forEach(asset => {
-    holdings[asset.symbol] = asset.total_quantity;
-  });
-  return holdings;
-};
+    const holdings = {};
+    consolidatedAssets.forEach(asset => {
+      holdings[asset.symbol] = asset.total_quantity;
+    });
+    return holdings;
+  };
 
   if (loading) {
     return (
@@ -160,51 +161,63 @@ const ConsolidatedPortfolioDetails = () => {
         )}
       </div>
 
-      {/* Summary Cards - Updated to include cash */}
-      {summary && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-          <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-2">Total Value</h3>
-            <p className="text-2xl font-bold text-gray-900">
-              {formatCurrency(summary.total_value)}
-            </p>
-            <p className="text-xs text-gray-500 mt-1">
-              Securities + Cash
-            </p>
-          </div>
+      {/* Two-column layout for summary and currency view */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Summary Cards Section */}
+        <div>
+          {summary && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white p-6 rounded-lg shadow">
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Total Value</h3>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatCurrency(summary.total_value)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Securities + Cash
+                </p>
+              </div>
 
-          <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-2">Securities Value</h3>
-            <p className="text-2xl font-bold text-gray-900">
-              {formatCurrency(summary.securities_value || summary.total_value)}
-            </p>
-          </div>
+              <div className="bg-white p-6 rounded-lg shadow">
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Securities Value</h3>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatCurrency(summary.securities_value || summary.total_value)}
+                </p>
+              </div>
 
-          <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-2">Cash Balance</h3>
-            <p className="text-2xl font-bold text-gray-900">
-              {formatCurrency(summary.cash_balance || 0)}
-            </p>
-          </div>
+              <div className="bg-white p-6 rounded-lg shadow">
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Cash Balance</h3>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatCurrency(summary.cash_balance || 0)}
+                </p>
+              </div>
 
-          <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-2">Total Gain/Loss</h3>
-            <p className={`text-2xl font-bold ${summary.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {formatCurrency(summary.total_gain_loss)}
-            </p>
-            <p className={`text-sm ${summary.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {formatPercentage((summary.total_gain_loss / summary.total_cost) * 100)}
-            </p>
-          </div>
+              <div className="bg-white p-6 rounded-lg shadow">
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Total Gain/Loss</h3>
+                <p className={`text-2xl font-bold ${summary.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {formatCurrency(summary.total_gain_loss)}
+                </p>
+                <p className={`text-sm ${summary.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {formatPercentage((summary.total_gain_loss / summary.total_cost) * 100)}
+                </p>
+              </div>
 
-          <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-2">Total Dividends</h3>
-            <p className="text-2xl font-bold text-gray-900">
-              {formatCurrency(summary.total_dividends || 0)}
-            </p>
-          </div>
+              <div className="bg-white p-6 rounded-lg shadow col-span-2">
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Total Dividends</h3>
+                <p className="text-2xl font-bold text-gray-900">
+                  {formatCurrency(summary.total_dividends || 0)}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Currency View Section */}
+        <div>
+          {portfolio && (
+            <PortfolioCurrencyView portfolio={portfolio} />
+          )}
+        </div>
+      </div>
 
       {/* Cash Management Section */}
       {cashAccount && (
@@ -299,72 +312,68 @@ const ConsolidatedPortfolioDetails = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-right">
                         <div className={`text-sm font-medium ${asset.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                           <div className="flex items-center justify-end">
-                            {asset.total_gain_loss >= 0 ?
-                              <TrendingUp className="w-4 h-4 mr-1" /> :
+                            {asset.total_gain_loss >= 0 ? (
+                              <TrendingUp className="w-4 h-4 mr-1" />
+                            ) : (
                               <TrendingDown className="w-4 h-4 mr-1" />
-                            }
-                            {formatCurrency(asset.total_gain_loss)}
+                            )}
+                            {formatCurrency(Math.abs(asset.total_gain_loss))}
                           </div>
                           <div className="text-xs">
-                            {formatPercentage(asset.gain_loss_percentage)}
+                            {formatPercentage(asset.total_gain_loss_percentage)}
                           </div>
                         </div>
                       </td>
                     </tr>
 
-                    {/* Expanded transactions */}
+                    {/* Expanded Row - Transactions */}
                     {expandedRows[asset.key] && (
                       <tr>
                         <td colSpan="6" className="px-6 py-4 bg-gray-50">
-                          <div className="ml-8">
-                            <div className="flex justify-between items-center mb-3">
-                              <h4 className="text-sm font-medium text-gray-700">Individual Transactions</h4>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleAddTransactionForSecurity(asset);
-                                }}
-                                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm font-medium"
-                              >
-                                Add Transaction
-                              </button>
-                            </div>
+                          <div className="mb-3 flex justify-between items-center">
+                            <h4 className="text-sm font-medium text-gray-700">Transaction History</h4>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleAddTransactionForSecurity(asset);
+                              }}
+                              className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                            >
+                              + Add Transaction
+                            </button>
+                          </div>
+                          <div className="overflow-hidden">
                             <table className="min-w-full">
                               <thead>
-                                <tr className="text-xs text-gray-500">
-                                  <th className="text-left pb-2">Date</th>
-                                  <th className="text-left pb-2">Type</th>
-                                  <th className="text-right pb-2">Quantity</th>
-                                  <th className="text-right pb-2">Price</th>
-                                  <th className="text-right pb-2">Value</th>
-                                  <th className="text-right pb-2">Gain/Loss</th>
-                                  <th className="text-right pb-2">Actions</th>
+                                <tr className="text-xs text-gray-500 uppercase">
+                                  <th className="text-left py-2">Date</th>
+                                  <th className="text-left py-2">Type</th>
+                                  <th className="text-right py-2">Quantity</th>
+                                  <th className="text-right py-2">Price</th>
+                                  <th className="text-right py-2">Total</th>
+                                  <th className="text-right py-2">Gain/Loss</th>
+                                  <th className="text-right py-2">Action</th>
                                 </tr>
                               </thead>
-                              <tbody className="divide-y divide-gray-200">
-                                {asset.transactions.map((transaction, idx) => (
-                                  <tr key={idx} className="text-sm">
-                                    <td className="py-2">{formatDate(transaction.transaction_date || transaction.purchase_date)}</td>
+                              <tbody className="text-sm">
+                                {asset.transactions.map((transaction) => (
+                                  <tr key={transaction.id} className="border-t border-gray-200">
+                                    <td className="py-2">{formatDate(transaction.date)}</td>
                                     <td className="py-2">
-                                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
-                                        ${transaction.transaction_type === 'BUY' ? 'bg-green-100 text-green-800' :
-                                          transaction.transaction_type === 'SELL' ? 'bg-red-100 text-red-800' :
-                                          transaction.transaction_type === 'DIVIDEND' ? 'bg-blue-100 text-blue-800' :
-                                          'bg-gray-100 text-gray-800'}`}>
+                                      <span className={`px-2 py-1 rounded text-xs ${
+                                        transaction.transaction_type === 'BUY' ? 'bg-green-100 text-green-800' :
+                                        transaction.transaction_type === 'SELL' ? 'bg-red-100 text-red-800' :
+                                        transaction.transaction_type === 'DIVIDEND' ? 'bg-blue-100 text-blue-800' :
+                                        transaction.transaction_type === 'SPLIT' ? 'bg-purple-100 text-purple-800' :
+                                        'bg-gray-100 text-gray-800'
+                                      }`}>
                                         {transaction.transaction_type}
                                       </span>
                                     </td>
-                                    <td className="text-right py-2">{transaction.quantity.toLocaleString()}</td>
-                                    <td className="text-right py-2">
-                                      {transaction.transaction_type === 'DIVIDEND'
-                                        ? transaction.dividend_per_share
-                                          ? formatCurrency(transaction.dividend_per_share) + '/share'
-                                          : '-'
-                                        : formatCurrency(transaction.price || transaction.purchase_price)
-                                      }
-                                    </td>
+                                    <td className="text-right py-2">{transaction.quantity}</td>
+                                    <td className="text-right py-2">{formatCurrency(transaction.price)}</td>
                                     <td className="text-right py-2">{formatCurrency(transaction.value)}</td>
-                                    <td className={`text-right py-2 ${
+                                    <td className={`text-right py-2 font-medium ${
                                       transaction.transaction_type === 'DIVIDEND' ? 'text-blue-600' :
                                       transaction.transaction_type === 'SELL' ? 'text-gray-600' :
                                       transaction.gain_loss >= 0 ? 'text-green-600' : 'text-red-600'

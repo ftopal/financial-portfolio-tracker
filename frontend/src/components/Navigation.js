@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AppBar,
@@ -22,11 +22,14 @@ import {
   SwapHoriz as TransactionsIcon,
   Logout as LogoutIcon,
   Folder as FolderIcon,
-  Settings as SettingsIcon,  // Add this import
+  Settings as SettingsIcon,
+  CurrencyExchange as CurrencyIcon, // Add currency icon
 } from '@mui/icons-material';
+import CurrencyManager from './CurrencyManager'; // Import the CurrencyManager component
 
 const Navigation = () => {
-  const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [currencyManagerOpen, setCurrencyManagerOpen] = useState(false); // Add state for currency manager
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -42,6 +45,11 @@ const Navigation = () => {
       return;
     }
     setDrawerOpen(open);
+  };
+
+  const handleCurrencyManagerOpen = () => {
+    setCurrencyManagerOpen(true);
+    setDrawerOpen(false); // Close drawer when opening currency manager
   };
 
   const menuItems = [
@@ -69,7 +77,17 @@ const Navigation = () => {
             Financial Portfolio Tracker
           </Typography>
 
-          {/* Add Settings icon button in the AppBar */}
+          {/* Currency Manager Button in AppBar */}
+          <IconButton
+            color="inherit"
+            onClick={handleCurrencyManagerOpen}
+            sx={{ mr: 1 }}
+            title="Manage Currencies"
+          >
+            <CurrencyIcon />
+          </IconButton>
+
+          {/* Settings icon button in the AppBar */}
           <IconButton
             color="inherit"
             component={Link}
@@ -107,7 +125,16 @@ const Navigation = () => {
           </List>
           <Divider />
           <List>
-            {/* Add Settings in the drawer menu */}
+            {/* Add Manage Currencies in the drawer menu */}
+            <ListItem
+              button
+              onClick={handleCurrencyManagerOpen}
+            >
+              <ListItemIcon><CurrencyIcon /></ListItemIcon>
+              <ListItemText primary="Manage Currencies" />
+            </ListItem>
+
+            {/* Settings in the drawer menu */}
             <ListItem
               button
               component={Link}
@@ -124,6 +151,12 @@ const Navigation = () => {
           </List>
         </Box>
       </Drawer>
+
+      {/* Currency Manager Dialog */}
+      <CurrencyManager
+        open={currencyManagerOpen}
+        onClose={() => setCurrencyManagerOpen(false)}
+      />
     </>
   );
 };
