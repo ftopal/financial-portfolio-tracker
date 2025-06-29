@@ -1,5 +1,3 @@
-// Update your frontend/src/services/api.js file
-
 import axios from 'axios';
 
 // Base URL for the API
@@ -48,7 +46,7 @@ API.interceptors.response.use(
   }
 );
 
-// Currency-related endpoints grouped together
+/// Currency-related endpoints grouped together
 export const currencyAPI = {
   // Basic currency operations
   list: () => API.get('currencies/'),
@@ -71,9 +69,13 @@ export const currencyAPI = {
   }
 };
 
+// Also add to API object for backward compatibility
+API.currencies = currencyAPI;
+API.exchangeRates = currencyAPI.exchangeRates;
+
 API.userPreferences = {
-  get: () => api.get('/api/user-preferences/'),
-  update: (data) => api.patch('/api/user-preferences/', data),
+  get: () => API.get('/api/user-preferences/'),
+  update: (data) => API.patch('/api/user-preferences/', data),
 };
 
 // Authentication services

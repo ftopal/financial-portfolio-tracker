@@ -15,10 +15,11 @@ import {
   IconButton,
   Typography,
   CircularProgress,
-  Alert
+  Alert,
+  Box
 } from '@mui/material';
 import { Refresh as RefreshIcon } from '@mui/icons-material';
-import api from '../services/api';
+import api, { currencyAPI } from '../services/api';
 
 const CurrencyManager = ({ open, onClose }) => {
   const [exchangeRates, setExchangeRates] = useState([]);
@@ -34,14 +35,20 @@ const CurrencyManager = ({ open, onClose }) => {
 
   const fetchExchangeRates = async () => {
     setLoading(true);
+    setError('');
     try {
-      const response = await api.exchangeRates.list({
-        from_currency: 'USD',
-        limit: 20
+      // Use the correct API method
+      const response = await api.get('exchange-rates/', {
+        params: {
+          from_currency: 'USD',
+          limit: 20
+        }
       });
-      setExchangeRates(response.data);
+      setExchangeRates(response.data || []);
     } catch (err) {
+      console.error('Failed to fetch exchange rates:', err);
       setError('Failed to fetch exchange rates');
+      setExchangeRates([]);
     } finally {
       setLoading(false);
     }
@@ -51,13 +58,26 @@ const CurrencyManager = ({ open, onClose }) => {
     setUpdating(true);
     setError('');
     try {
-      await api.currencies.updateRates();
-      await fetchExchangeRates();
+      // Use the currencyAPI.updateRates method
+      await api.post('currencies/update_rates/');
+      // Wait a moment for the update to complete
+      setTimeout(async () => {
+        await fetchExchangeRates();
+        setUpdating(false);
+      }, 1000);
     } catch (err) {
+      console.error('Failed to update exchange rates:', err);
       setError('Failed to update exchange rates');
-    } finally {
       setUpdating(false);
     }
+  };
+
+  const formatRate = (rate) => {
+    return parseFloat(rate).toFixed(4);
+  };
+
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString();
   };
 
   return (
@@ -67,42 +87,69 @@ const CurrencyManager = ({ open, onClose }) => {
         <IconButton
           onClick={updateRates}
           disabled={updating}
-          sx={{ float: 'right' }}
+          sx={{
+            float: 'right',
+            animation: updating ? 'rotate 1s linear infinite' : 'none',
+            '@keyframes rotate': {
+              '0%': { transform: 'rotate(0deg)' },
+              '100%': { transform: 'rotate(360deg)' }
+            }
+          }}
+          title="Update exchange rates"
         >
           <RefreshIcon />
         </IconButton>
       </DialogTitle>
 
       <DialogContent>
-        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
+            {error}
+          </Alert>
+        )}
 
         {loading ? (
-          <CircularProgress />
+          <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+            <CircularProgress />
+          </Box>
+        ) : exchangeRates.length === 0 ? (
+          <Typography align="center" color="text.secondary" sx={{ p: 3 }}>
+            No exchange rates found. Click the refresh button to update rates.
+          </Typography>
         ) : (
-          <TableContainer component={Paper}>
-            <Table>
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small">
               <TableHead>
                 <TableRow>
                   <TableCell>From</TableCell>
                   <TableCell>To</TableCell>
-                  <TableCell>Rate</TableCell>
-                  <TableCell>Date</TableCell>
+                  <TableCell align="right">Rate</TableCell>
+                  <TableCell align="right">Date</TableCell>
                   <TableCell>Source</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {exchangeRates.map((rate, index) => (
-                  <TableRow key={index}>
+                  <TableRow key={index} hover>
                     <TableCell>{rate.from_currency}</TableCell>
                     <TableCell>{rate.to_currency}</TableCell>
-                    <TableCell>{parseFloat(rate.rate).toFixed(4)}</TableCell>
-                    <TableCell>{new Date(rate.date).toLocaleDateString()}</TableCell>
+                    <TableCell align="right">{formatRate(rate.rate)}</TableCell>
+                    <TableCell align="right">{formatDate(rate.date)}</TableCell>
                     <TableCell>{rate.source}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </TableContainer>
+        )}
+
+        {updating && (
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mt: 2 }}>
+            <CircularProgress size={20} sx={{ mr: 1 }} />
+            <Typography variant="body2" color="text.secondary">
+              Updating exchange rates...
+            </Typography>
+          </Box>
         )}
       </DialogContent>
 

@@ -99,7 +99,15 @@ class CurrencyService:
                 response.raise_for_status()
                 data = response.json()
 
-                rates = data.get('rates', {})
+                # FIX: Handle both API versions
+                # v6 API (paid) uses 'conversion_rates'
+                # v4 API (free) uses 'rates'
+                rates = data.get('conversion_rates') or data.get('rates', {})
+
+                if not rates:
+                    logger.error(f"No rates found in API response for {base}")
+                    continue
+
                 date = timezone.now().date()
 
                 for target in target_currencies:

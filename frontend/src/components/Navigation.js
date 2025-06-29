@@ -34,6 +34,7 @@ const Navigation = () => {
 
   const handleLogout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('user');
     navigate('/login');
   };
 
@@ -153,10 +154,12 @@ const Navigation = () => {
       </Drawer>
 
       {/* Currency Manager Dialog */}
-      <CurrencyManager
-        open={currencyManagerOpen}
-        onClose={() => setCurrencyManagerOpen(false)}
-      />
+      {currencyManagerOpen && (
+        <CurrencyManager
+          open={currencyManagerOpen}
+          onClose={() => setCurrencyManagerOpen(false)}
+        />
+      )}
     </>
   );
 };

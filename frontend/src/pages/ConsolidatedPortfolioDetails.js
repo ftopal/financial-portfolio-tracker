@@ -106,15 +106,39 @@ const ConsolidatedPortfolioDetails = () => {
   };
 
   const formatPercentage = (value) => {
+    if (value === undefined || value === null || isNaN(value)) {
+      return '0.00%';
+    }
     return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
   };
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
+    if (!dateString) return 'N/A';
+
+    try {
+      // Handle different date formats
+      let date;
+      if (dateString.includes('T')) {
+        // ISO format with time
+        date = new Date(dateString);
+      } else {
+        // Just date, assume UTC to avoid timezone issues
+        date = new Date(dateString + 'T00:00:00Z');
+      }
+
+      if (isNaN(date.getTime())) {
+        return 'Invalid Date';
+      }
+
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    } catch (error) {
+      console.error('Date formatting error:', error);
+      return 'Invalid Date';
+    }
   };
 
   const getHoldingsMap = () => {
@@ -197,7 +221,7 @@ const ConsolidatedPortfolioDetails = () => {
                   {formatCurrency(summary.total_gain_loss)}
                 </p>
                 <p className={`text-sm ${summary.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {formatPercentage((summary.total_gain_loss / summary.total_cost) * 100)}
+                  {summary.total_cost > 0 ? formatPercentage((summary.total_gain_loss / summary.total_cost) * 100) : '0.00%'}
                 </p>
               </div>
 
@@ -320,7 +344,12 @@ const ConsolidatedPortfolioDetails = () => {
                             {formatCurrency(Math.abs(asset.total_gain_loss))}
                           </div>
                           <div className="text-xs">
-                            {formatPercentage(asset.total_gain_loss_percentage)}
+                            {(() => {
+                              // Calculate percentage from gain/loss and total cost
+                              const totalCost = asset.avg_cost_price * asset.total_quantity;
+                              const percentage = totalCost > 0 ? (asset.total_gain_loss / totalCost) * 100 : 0;
+                              return formatPercentage(percentage);
+                            })()}
                           </div>
                         </div>
                       </td>
@@ -358,7 +387,7 @@ const ConsolidatedPortfolioDetails = () => {
                               <tbody className="text-sm">
                                 {asset.transactions.map((transaction) => (
                                   <tr key={transaction.id} className="border-t border-gray-200">
-                                    <td className="py-2">{formatDate(transaction.date)}</td>
+                                    <td className="py-2">{formatDate(transaction.date || transaction.transaction_date)}</td>
                                     <td className="py-2">
                                       <span className={`px-2 py-1 rounded text-xs ${
                                         transaction.transaction_type === 'BUY' ? 'bg-green-100 text-green-800' :
@@ -385,7 +414,7 @@ const ConsolidatedPortfolioDetails = () => {
                                       ) : (
                                         <>
                                           {formatCurrency(transaction.gain_loss || 0)}
-                                          {transaction.gain_loss_percentage !== undefined && (
+                                          {transaction.gain_loss_percentage !== undefined && transaction.gain_loss_percentage !== null && (
                                             <div className="text-xs">
                                               {formatPercentage(transaction.gain_loss_percentage)}
                                             </div>
