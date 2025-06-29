@@ -46,7 +46,7 @@ API.interceptors.response.use(
   }
 );
 
-/// Currency-related endpoints grouped together
+// Currency-related endpoints grouped together
 export const currencyAPI = {
   // Basic currency operations
   list: () => API.get('currencies/'),

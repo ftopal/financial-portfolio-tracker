@@ -19,7 +19,7 @@ import {
   Box
 } from '@mui/material';
 import { Refresh as RefreshIcon } from '@mui/icons-material';
-import api, { currencyAPI } from '../services/api';
+import { currencyAPI } from '../services/api';  // Import the currencyAPI directly
 
 const CurrencyManager = ({ open, onClose }) => {
   const [exchangeRates, setExchangeRates] = useState([]);
@@ -37,14 +37,16 @@ const CurrencyManager = ({ open, onClose }) => {
     setLoading(true);
     setError('');
     try {
-      // Use the correct API method
-      const response = await api.get('exchange-rates/', {
-        params: {
-          from_currency: 'USD',
-          limit: 20
-        }
-      });
-      setExchangeRates(response.data || []);
+      console.log('Fetching exchange rates...');
+
+      // Use currencyAPI.exchangeRates.list()
+      const response = await currencyAPI.exchangeRates.list({ limit: 100 });
+
+      console.log('Exchange rates response:', response);
+
+      // Handle the response data
+      const rates = response.data || [];
+      setExchangeRates(rates);
     } catch (err) {
       console.error('Failed to fetch exchange rates:', err);
       setError('Failed to fetch exchange rates');
@@ -58,8 +60,9 @@ const CurrencyManager = ({ open, onClose }) => {
     setUpdating(true);
     setError('');
     try {
-      // Use the currencyAPI.updateRates method
-      await api.post('currencies/update_rates/');
+      // Use currencyAPI.updateRates()
+      await currencyAPI.updateRates();
+
       // Wait a moment for the update to complete
       setTimeout(async () => {
         await fetchExchangeRates();
