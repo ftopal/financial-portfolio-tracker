@@ -142,6 +142,22 @@ const PortfolioList = () => {
                       <MoreVertIcon />
                     </IconButton>
                   </Box>
+                  <Box>
+                    <Typography variant="h6" component={Link} to={`/portfolios/${portfolio.id}`}
+                      sx={{ textDecoration: 'none', color: 'inherit', '&:hover': { color: 'primary.main' } }}>
+                      {portfolio.name}
+                      <Chip
+                        label={portfolio.base_currency || 'USD'}
+                        size="small"
+                        sx={{ ml: 1, height: 22 }}
+                        color="primary"
+                        variant="outlined"
+                      />
+                    </Typography>
+                    {portfolio.is_default && (
+                      <Chip label="Default" size="small" color="primary" sx={{ mt: 1 }} />
+                    )}
+                  </Box>
 
                   {portfolio.description && (
                     <Typography variant="body2" color="textSecondary" gutterBottom>
@@ -154,7 +170,10 @@ const PortfolioList = () => {
                     <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
                       <Typography variant="body2" color="textSecondary">Total Value</Typography>
                       <Typography variant="h5" fontWeight="bold">
-                        {formatCurrency(portfolio.total_value_with_cash || portfolio.total_value)}
+                        {formatCurrency(
+                          portfolio.total_value_with_cash || portfolio.total_value,
+                          portfolio.base_currency || 'USD'
+                        )}
                       </Typography>
                     </Box>
 
@@ -163,14 +182,14 @@ const PortfolioList = () => {
                       <Box>
                         <Typography variant="caption" color="textSecondary">Securities</Typography>
                         <Typography variant="body2">
-                          {formatCurrency(portfolio.total_value)}
+                          {formatCurrency(portfolio.total_value, portfolio.base_currency || 'USD')}
                         </Typography>
                       </Box>
                       <Box textAlign="right">
                         <Typography variant="caption" color="textSecondary">Cash</Typography>
                         <Typography variant="body2">
                           <AccountBalanceIcon sx={{ fontSize: 14, verticalAlign: 'middle', mr: 0.5 }} />
-                          {formatCurrency(portfolio.cash_balance || 0)}
+                          {formatCurrency(portfolio.cash_balance || 0, portfolio.base_currency || 'USD')}
                         </Typography>
                       </Box>
                     </Box>
@@ -187,7 +206,7 @@ const PortfolioList = () => {
                         color={portfolio.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
                         fontWeight="medium"
                       >
-                        {formatCurrency(portfolio.total_gain_loss)}
+                        {formatCurrency(portfolio.total_gain_loss, portfolio.base_currency || 'USD')}
                         {' '}
                         ({formatPercentage(portfolio.gain_loss_percentage)})
                       </Typography>
@@ -201,9 +220,12 @@ const PortfolioList = () => {
                       <Typography variant="caption" color="textSecondary">
                         {portfolio.transaction_count || 0} Transactions
                       </Typography>
-                      <Typography variant="caption" color="textSecondary">
-                        {portfolio.currency}
-                      </Typography>
+                      <Chip
+                        label={portfolio.base_currency || 'USD'}
+                        size="small"
+                        variant="outlined"
+                        sx={{ height: 20 }}
+                      />
                     </Box>
                   </Box>
                 </CardContent>

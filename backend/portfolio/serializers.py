@@ -149,7 +149,7 @@ class PortfolioSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'total_value', 'total_cost',
             'total_gains', 'holdings_count', 'asset_count', 'transaction_count',
             'total_gain_loss', 'gain_loss_percentage', 'cash_balance',
-            'total_value_with_cash'
+            'total_value_with_cash', 'base_currency'
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
 

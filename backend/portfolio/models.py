@@ -15,6 +15,11 @@ class Portfolio(models.Model):
     currency = models.CharField(max_length=3, default='USD')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    base_currency = models.CharField(
+        max_length=3,
+        default='USD',  # This ensures existing portfolios will have USD
+        help_text='Base currency for this portfolio'
+    )
 
     class Meta:
         unique_together = ['user', 'name']
