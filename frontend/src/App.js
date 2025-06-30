@@ -56,14 +56,6 @@ function App() {
               }
             />
             <Route
-              path="/dashboard/:portfolioId"
-              element={
-                <ProtectedRoute>
-                  <Dashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
               path="/portfolios"
               element={
                 <ProtectedRoute>
