@@ -116,6 +116,9 @@ const Portfolios = () => {
                 className="text-xl font-semibold mb-2 text-blue-600 hover:text-blue-800 block"
               >
                 {portfolio.name}
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                  {portfolio.base_currency || 'USD'}
+                </span>
               </Link>
 
               <p className="text-gray-600 mb-4">{portfolio.description || 'No description'}</p>
@@ -131,7 +134,7 @@ const Portfolios = () => {
                 </div>
                 <div className="flex justify-between text-sm mt-2">
                   <span className="text-gray-500">Total Value</span>
-                  <span className="font-semibold">{formatCurrency(portfolio.total_value)}</span>
+                  <span className="font-semibold">{formatCurrency(portfolio.total_value, portfolio.base_currency)}</span>
                 </div>
                 <div className="flex justify-between text-sm mt-2">
                   <span className="text-gray-500">Total Gain/Loss</span>

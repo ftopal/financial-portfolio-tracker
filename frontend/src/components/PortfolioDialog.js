@@ -1,3 +1,4 @@
+// src/components/PortfolioDialog.js - Updated with currency selection
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
@@ -6,32 +7,60 @@ import {
   DialogActions,
   TextField,
   Button,
-  Box
+  Box,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Alert
 } from '@mui/material';
 import api from '../services/api';
 
 const PortfolioDialog = ({ open, onClose, portfolio }) => {
   const [formData, setFormData] = useState({
     name: '',
-    description: ''
+    description: '',
+    base_currency: 'USD'  // Add base_currency
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [currencies, setCurrencies] = useState([]);
+  const [loadingCurrencies, setLoadingCurrencies] = useState(false);
 
   useEffect(() => {
+    if (open) {
+      fetchSupportedCurrencies();
+    }
+
     if (portfolio) {
       setFormData({
         name: portfolio.name || '',
-        description: portfolio.description || ''
+        description: portfolio.description || '',
+        base_currency: portfolio.base_currency || 'USD'  // Include base_currency
       });
     } else {
       setFormData({
         name: '',
-        description: ''
+        description: '',
+        base_currency: 'USD'  // Default to USD for new portfolios
       });
     }
     setError('');
-  }, [portfolio]);
+  }, [portfolio, open]);
+
+  const fetchSupportedCurrencies = async () => {
+    setLoadingCurrencies(true);
+    try {
+      const response = await api.portfolios.supported_currencies();
+      setCurrencies(response.data.currencies || []);
+    } catch (err) {
+      console.error('Error fetching currencies:', err);
+      // Fallback to common currencies
+      setCurrencies(['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY']);
+    } finally {
+      setLoadingCurrencies(false);
+    }
+  };
 
   const handleChange = (e) => {
     setFormData({
@@ -47,10 +76,11 @@ const PortfolioDialog = ({ open, onClose, portfolio }) => {
 
     try {
       if (portfolio) {
-        // Update existing portfolio
-        await api.portfolios.update(portfolio.id, formData);
+        // Update existing portfolio (exclude base_currency as it can't be changed)
+        const { base_currency, ...updateData } = formData;
+        await api.portfolios.update(portfolio.id, updateData);
       } else {
-        // Create new portfolio
+        // Create new portfolio with base_currency
         await api.portfolios.create(formData);
       }
       onClose();
@@ -76,9 +106,9 @@ const PortfolioDialog = ({ open, onClose, portfolio }) => {
         <DialogContent>
           <Box sx={{ mt: 2 }}>
             {error && (
-              <Box sx={{ mb: 2, p: 2, bgcolor: 'error.light', color: 'error.contrastText', borderRadius: 1 }}>
+              <Alert severity="error" sx={{ mb: 2 }}>
                 {error}
-              </Box>
+              </Alert>
             )}
             <TextField
               fullWidth
@@ -101,6 +131,32 @@ const PortfolioDialog = ({ open, onClose, portfolio }) => {
               disabled={loading}
               margin="normal"
             />
+
+            {/* Currency selector - only for new portfolios */}
+            {!portfolio && (
+              <FormControl fullWidth margin="normal" disabled={loading || loadingCurrencies}>
+                <InputLabel>Base Currency</InputLabel>
+                <Select
+                  name="base_currency"
+                  value={formData.base_currency}
+                  onChange={handleChange}
+                  label="Base Currency"
+                >
+                  {currencies.map((currency) => (
+                    <MenuItem key={currency} value={currency}>
+                      {currency}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+
+            {/* Info message for existing portfolios */}
+            {portfolio && (
+              <Alert severity="info" sx={{ mt: 2 }}>
+                Base currency ({portfolio.base_currency || 'USD'}) cannot be changed after portfolio creation
+              </Alert>
+            )}
           </Box>
         </DialogContent>
         <DialogActions>

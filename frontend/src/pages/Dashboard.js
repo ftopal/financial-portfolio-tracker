@@ -1,317 +1,611 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Box, Paper, Typography, Grid, Card, CardContent } from '@mui/material';
-import { TrendingUp, TrendingDown } from '@mui/icons-material';
-import api from '../services/api';
-import CurrencySelector from '../components/CurrencySelector';
-import CurrencyDisplay from '../components/CurrencyDisplay';
-import { useCurrency } from '../contexts/CurrencyContext';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useParams, Link as RouterLink } from 'react-router-dom';
+import {
+  Box,
+  Container,
+  Typography,
+  Paper,
+  Grid,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  Button,
+  IconButton,
+  Collapse,
+  Alert,
+  CircularProgress,
+  Card,
+  CardContent,
+  Breadcrumbs,
+  Link,
+  Tooltip,
+  Divider,
+  Stack
+} from '@mui/material';
+import {
+  ChevronRight as ChevronRightIcon,
+  ExpandMore as ExpandMoreIcon,
+  TrendingUp as TrendingUpIcon,
+  TrendingDown as TrendingDownIcon,
+  Delete as DeleteIcon,
+  Add as AddIcon,
+  AccountBalance as AccountBalanceIcon,
+  ShowChart as ShowChartIcon,
+  AttachMoney as AttachMoneyIcon,
+  AccountBalanceWallet as WalletIcon,
+  ArrowBack as ArrowBackIcon
+} from '@mui/icons-material';
+import { api } from '../services/api';
+import CashManagement from '../components/CashManagement';
+import TransactionForm from '../components/TransactionForm';
+import PortfolioCurrencyView from '../components/PortfolioCurrencyView';
 
-const Dashboard = () => {
-  const navigate = useNavigate();
-  const { displayCurrency, setDisplayCurrency } = useCurrency();
+const ConsolidatedPortfolioDetails = () => {
+  const { portfolioId } = useParams();
+  const [portfolio, setPortfolio] = useState(null);
+  const [consolidatedAssets, setConsolidatedAssets] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [cashAccount, setCashAccount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [convertedValues, setConvertedValues] = useState({});
+  const [expandedRows, setExpandedRows] = useState({});
+  const [selectedSecurity, setSelectedSecurity] = useState(null);
+  const [showTransactionForm, setShowTransactionForm] = useState(false);
 
-  useEffect(() => {
-    fetchSummary();
-  }, []);
-
-  useEffect(() => {
-    if (summary && displayCurrency !== 'USD') {
-      convertSummaryValues();
-    }
-  }, [displayCurrency, summary]);
-
-  const fetchSummary = async () => {
+  const fetchConsolidatedData = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await api.portfolios.getSummary();
-      setSummary(response.data);
+      const response = await api.portfolios.getConsolidatedView(portfolioId);
+
+      setPortfolio(response.data.portfolio || {});
+      setConsolidatedAssets(response.data.consolidated_assets || []);
+      setSummary(response.data.summary || {});
+      setCashAccount(response.data.cash_account || null);
       setError('');
     } catch (err) {
-      setError('Failed to load portfolio summary');
-      console.error(err);
+      console.error('Error fetching consolidated data:', err);
+      setError('Failed to load portfolio data');
+      setConsolidatedAssets([]);
     } finally {
       setLoading(false);
     }
+  }, [portfolioId]);
+
+  useEffect(() => {
+    fetchConsolidatedData();
+  }, [portfolioId, fetchConsolidatedData]);
+
+  const toggleRow = (key) => {
+    setExpandedRows(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
   };
 
-  const convertSummaryValues = async () => {
-    if (!summary || !summary.portfolios) return;
+  const handleAddTransactionForSecurity = (asset) => {
+    const firstTransaction = asset.transactions && asset.transactions.length > 0
+      ? asset.transactions[0]
+      : null;
 
-    try {
-      const converted = {};
+    setSelectedSecurity({
+      id: firstTransaction ? firstTransaction.stock_id : null,
+      symbol: asset.symbol,
+      name: asset.name,
+      current_price: asset.current_price,
+      security_type: asset.asset_type,
+      total_quantity: asset.total_quantity
+    });
 
-      // Convert total values
-      for (const portfolio of summary.portfolios) {
-        const valueResponse = await api.portfolios.getValueInCurrency(
-          portfolio.portfolio.id,
-          displayCurrency
-        );
-        converted[portfolio.portfolio.id] = valueResponse.data.value;
+    setShowTransactionForm(true);
+  };
+
+  const handleDeleteTransaction = async (transactionId, securityName) => {
+    if (window.confirm(`Are you sure you want to delete this transaction for ${securityName}?`)) {
+      try {
+        await api.transactions.delete(transactionId);
+        fetchConsolidatedData();
+      } catch (err) {
+        console.error('Error deleting transaction:', err);
+        alert('Failed to delete transaction. Please try again.');
       }
-
-      setConvertedValues(converted);
-    } catch (err) {
-      console.error('Failed to convert currency values:', err);
     }
   };
 
-  const formatCurrency = (amount) => {
-    if (amount === undefined || amount === null) {
-      return '$0.00';
-    }
+  const handleOpenNewTransactionModal = () => {
+    setSelectedSecurity(null);
+    setShowTransactionForm(true);
+  };
+
+  const handleTransactionSuccess = () => {
+    setShowTransactionForm(false);
+    setSelectedSecurity(null);
+    fetchConsolidatedData();
+  };
+
+  const formatCurrency = (amount, currency = null) => {
+    const currencyCode = currency || portfolio?.base_currency || 'USD';
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
-      currency: displayCurrency
-    }).format(amount);
+      currency: currencyCode
+    }).format(amount || 0);
   };
 
   const formatPercentage = (value) => {
-    if (value === undefined || value === null) {
+    if (value === undefined || value === null || isNaN(value)) {
       return '0.00%';
     }
     return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
   };
 
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
 
-  if (error) {
-    return (
-      <div className="max-w-7xl mx-auto p-6">
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
-          {error}
-        </div>
-      </div>
-    );
-  }
-
-  const totals = summary?.totals || {};
-  const assetBreakdown = summary?.asset_breakdown || [];
-
-  return (
-    <div className="max-w-7xl mx-auto p-6">
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Portfolio Dashboard</h1>
-        <div className="w-48">
-          <CurrencySelector
-            value={displayCurrency}
-            onChange={setDisplayCurrency}
-            label="Display Currency"
-            size="small"
-          />
-        </div>
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-sm font-medium text-gray-500 mb-2">Total Value</h3>
-          <p className="text-2xl font-bold text-gray-900">
-            <CurrencyDisplay
-              amount={totals.total_value}
-              currency="USD"
-              displayCurrency={displayCurrency}
-              showOriginal={false}
-            />
-          </p>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-sm font-medium text-gray-500 mb-2">Total Cost</h3>
-          <p className="text-2xl font-bold text-gray-900">
-            <CurrencyDisplay
-              amount={totals.total_cost}
-              currency="USD"
-              displayCurrency={displayCurrency}
-              showOriginal={false}
-            />
-          </p>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-sm font-medium text-gray-500 mb-2">Total Gain/Loss</h3>
-          <p className={`text-2xl font-bold ${
-            (totals.total_gain_loss || 0) >= 0 ? 'text-green-600' : 'text-red-600'
-          }`}>
-            <CurrencyDisplay
-              amount={totals.total_gain_loss}
-              currency="USD"
-              displayCurrency={displayCurrency}
-              showOriginal={false}
-              colorize={true}
-            />
-          </p>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-sm font-medium text-gray-500 mb-2">Return %</h3>
-          <p className={`text-2xl font-bold ${
-            (totals.gain_loss_percentage || 0) >= 0 ? 'text-green-600' : 'text-red-600'
-          }`}>
-            {formatPercentage(totals.gain_loss_percentage)}
-          </p>
-        </div>
-      </div>
-
-      {/* Portfolio Cards */}
-      {summary?.portfolios && (
-        <div className="mb-8">
-          <h2 className="text-xl font-bold text-gray-900 mb-4">Portfolio Breakdown</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {summary.portfolios.map((item) => (
-              <Card
-                key={item.portfolio.id}
-                className="cursor-pointer hover:shadow-lg transition-shadow"
-                onClick={() => navigate(`/portfolios/${item.portfolio.id}`)}
-              >
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    {item.portfolio.name}
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary" gutterBottom>
-                    Base Currency: {item.portfolio.currency}
-                  </Typography>
-                  <Box mt={2}>
-                    <Typography variant="body2" color="textSecondary">
-                      Total Value
-                    </Typography>
-                    <Typography variant="h5">
-                      <CurrencyDisplay
-                        amount={item.summary.total_value}
-                        currency={item.portfolio.currency}
-                        displayCurrency={displayCurrency}
-                        showOriginal={item.portfolio.currency !== displayCurrency}
-                      />
-                    </Typography>
-                  </Box>
-                  <Box mt={1}>
-                    <Typography
-                      variant="body1"
-                      color={item.summary.total_return >= 0 ? 'success.main' : 'error.main'}
-                    >
-                      {item.summary.total_return >= 0 ? <TrendingUp /> : <TrendingDown />}
-                      {formatPercentage(item.summary.total_return_pct)}
-                    </Typography>
-                  </Box>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Currency Exposure Chart */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Currency Exposure</h2>
-        <CurrencyExposureChart portfolios={summary?.portfolios} />
-      </div>
-
-      {/* Quick Actions */}
-      <div className="mt-8 flex space-x-4">
-        <button
-          onClick={() => navigate('/assets')}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
-        >
-          View All Assets
-        </button>
-        <button
-          onClick={() => navigate('/portfolios')}
-          className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded"
-        >
-          Manage Portfolios
-        </button>
-      </div>
-    </div>
-  );
-};
-
-// Currency Exposure Chart Component
-const CurrencyExposureChart = ({ portfolios }) => {
-  const [exposure, setExposure] = useState({});
-  const { displayCurrency } = useCurrency();
-
-  useEffect(() => {
-    if (portfolios) {
-      calculateTotalExposure();
-    }
-  }, [portfolios, displayCurrency]);
-
-  const calculateTotalExposure = async () => {
-    const totalExposure = {};
-
-    for (const item of portfolios) {
-      try {
-        const response = await api.portfolios.getCurrencyExposure(
-          item.portfolio.id,
-          displayCurrency
-        );
-
-        const data = response.data.exposure;
-        for (const [currency, info] of Object.entries(data)) {
-          if (!totalExposure[currency]) {
-            totalExposure[currency] = 0;
-          }
-          totalExposure[currency] += parseFloat(info.converted_amount || info.amount);
-        }
-      } catch (err) {
-        console.error('Failed to get currency exposure:', err);
+    try {
+      let date;
+      if (dateString.includes('T')) {
+        date = new Date(dateString);
+      } else {
+        date = new Date(dateString + 'T00:00:00Z');
       }
-    }
 
-    setExposure(totalExposure);
+      if (isNaN(date.getTime())) {
+        return 'Invalid Date';
+      }
+
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    } catch (error) {
+      console.error('Date formatting error:', error);
+      return 'Invalid Date';
+    }
   };
 
-  const total = Object.values(exposure).reduce((sum, val) => sum + val, 0);
+  const getHoldingsMap = () => {
+    const holdings = {};
+    consolidatedAssets.forEach(asset => {
+      holdings[asset.symbol] = asset.total_quantity;
+    });
+    return holdings;
+  };
+
+  const getTransactionTypeColor = (type) => {
+    const colors = {
+      'BUY': 'success',
+      'SELL': 'error',
+      'DIVIDEND': 'info',
+      'SPLIT': 'secondary'
+    };
+    return colors[type] || 'default';
+  };
+
+  if (loading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="80vh">
+        <CircularProgress size={60} />
+      </Box>
+    );
+  }
+
+  if (error && !portfolio) {
+    return (
+      <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+        <Button
+          component={RouterLink}
+          to="/portfolios"
+          variant="text"
+          startIcon={<ArrowBackIcon />}
+        >
+          Back to Portfolios
+        </Button>
+      </Container>
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      {Object.entries(exposure).map(([currency, amount]) => {
-        const percentage = total > 0 ? (amount / total) * 100 : 0;
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      {/* Header Section */}
+      <Box sx={{ mb: 4 }}>
+        <Button
+          component={RouterLink}
+          to="/portfolios"
+          startIcon={<ArrowBackIcon />}
+          sx={{ mb: 2 }}
+        >
+          Back to Portfolios
+        </Button>
 
-        return (
-          <div key={currency} className="flex items-center justify-between">
-            <div className="flex items-center">
-              <span className="text-sm font-medium text-gray-900">
-                {currency}
-              </span>
-            </div>
-            <div className="flex items-center space-x-4">
-              <div className="w-32 bg-gray-200 rounded-full h-2">
-                <div
-                  className="bg-blue-600 h-2 rounded-full"
-                  style={{ width: `${percentage}%` }}
-                />
-              </div>
-              <div className="text-right w-24">
-                <p className="text-sm font-medium text-gray-900">
-                  {percentage.toFixed(1)}%
-                </p>
-              </div>
-              <div className="text-right w-32">
-                <p className="text-sm text-gray-600">
-                  <CurrencyDisplay
-                    amount={amount}
-                    currency={displayCurrency}
-                    showCode={true}
-                  />
-                </p>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
+        <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
+          <Typography variant="h4" component="h1">
+            {portfolio?.name || 'Portfolio Details'}
+          </Typography>
+          <Chip
+            label={portfolio?.base_currency || 'USD'}
+            color="primary"
+            variant="outlined"
+            size="medium"
+            icon={<AttachMoneyIcon />}
+          />
+        </Stack>
+
+        {portfolio?.description && (
+          <Typography variant="body1" color="text.secondary">
+            {portfolio.description}
+          </Typography>
+        )}
+      </Box>
+
+      {/* Summary Cards and Currency View Grid */}
+      <Grid container spacing={3} sx={{ mb: 4 }}>
+        {/* Summary Cards */}
+        <Grid item xs={12} lg={6}>
+          {summary && (
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <Card elevation={2}>
+                  <CardContent>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Total Value
+                        </Typography>
+                        <Typography variant="h5" component="div" fontWeight="bold">
+                          {formatCurrency(summary.total_value)}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Securities + Cash
+                        </Typography>
+                      </Box>
+                      <WalletIcon color="primary" />
+                    </Stack>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <Card elevation={2}>
+                  <CardContent>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Securities Value
+                        </Typography>
+                        <Typography variant="h5" component="div" fontWeight="bold">
+                          {formatCurrency(summary.securities_value || summary.total_value)}
+                        </Typography>
+                      </Box>
+                      <ShowChartIcon color="primary" />
+                    </Stack>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <Card elevation={2}>
+                  <CardContent>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Cash Balance
+                        </Typography>
+                        <Typography variant="h5" component="div" fontWeight="bold">
+                          {formatCurrency(summary.cash_balance || 0)}
+                        </Typography>
+                      </Box>
+                      <AccountBalanceIcon color="primary" />
+                    </Stack>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} sm={6}>
+                <Card elevation={2}>
+                  <CardContent>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Total Gain/Loss
+                        </Typography>
+                        <Typography
+                          variant="h5"
+                          component="div"
+                          fontWeight="bold"
+                          color={summary.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
+                        >
+                          {formatCurrency(summary.total_gain_loss)}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color={summary.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
+                        >
+                          {summary.total_cost > 0 ? formatPercentage((summary.total_gain_loss / summary.total_cost) * 100) : '0.00%'}
+                        </Typography>
+                      </Box>
+                      {summary.total_gain_loss >= 0 ? (
+                        <TrendingUpIcon color="success" />
+                      ) : (
+                        <TrendingDownIcon color="error" />
+                      )}
+                    </Stack>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12}>
+                <Card elevation={2}>
+                  <CardContent>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Total Dividends
+                        </Typography>
+                        <Typography variant="h5" component="div" fontWeight="bold" color="info.main">
+                          {formatCurrency(summary.total_dividends || 0)}
+                        </Typography>
+                      </Box>
+                      <AttachMoneyIcon color="info" />
+                    </Stack>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </Grid>
+          )}
+        </Grid>
+
+        {/* Currency View */}
+        <Grid item xs={12} lg={6}>
+          {portfolio && (
+            <PortfolioCurrencyView portfolio={portfolio} />
+          )}
+        </Grid>
+      </Grid>
+
+      {/* Cash Management */}
+      {cashAccount && portfolio && (
+        <Box sx={{ mb: 4 }}>
+          <CashManagement
+            portfolioId={portfolioId}
+            cashBalance={cashAccount.balance}
+            currency={portfolio.base_currency || cashAccount.currency || 'USD'}
+            onBalanceUpdate={fetchConsolidatedData}
+            portfolio={portfolio}
+          />
+        </Box>
+      )}
+
+      {/* Securities Holdings Table */}
+      <Paper elevation={2} sx={{ mb: 3 }}>
+        <Box sx={{ p: 3, borderBottom: 1, borderColor: 'divider' }}>
+          <Typography variant="h6" component="h2" gutterBottom>
+            Securities Holdings
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Click on any row to see individual transactions
+          </Typography>
+        </Box>
+
+        {consolidatedAssets.length === 0 ? (
+          <Box sx={{ p: 6, textAlign: 'center' }}>
+            <Typography color="text.secondary" gutterBottom>
+              No securities in this portfolio yet.
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Add securities to start tracking your investments.
+            </Typography>
+          </Box>
+        ) : (
+          <TableContainer>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Asset</TableCell>
+                  <TableCell align="right">Quantity</TableCell>
+                  <TableCell align="right">Avg Cost ({portfolio?.base_currency || 'USD'})</TableCell>
+                  <TableCell align="right">Current Price ({portfolio?.base_currency || 'USD'})</TableCell>
+                  <TableCell align="right">Total Value ({portfolio?.base_currency || 'USD'})</TableCell>
+                  <TableCell align="right">Gain/Loss ({portfolio?.base_currency || 'USD'})</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {consolidatedAssets.map((asset) => (
+                  <React.Fragment key={asset.key}>
+                    <TableRow
+                      hover
+                      onClick={() => toggleRow(asset.key)}
+                      sx={{ cursor: 'pointer', '& > *': { borderBottom: 'unset' } }}
+                    >
+                      <TableCell>
+                        <Box display="flex" alignItems="center">
+                          <IconButton size="small" sx={{ mr: 1 }}>
+                            {expandedRows[asset.key] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+                          </IconButton>
+                          <Box>
+                            <Typography variant="body2" fontWeight="medium">
+                              {asset.symbol ? `${asset.symbol} - ${asset.name}` : asset.name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {asset.asset_type} • {asset.transactions.length} transaction{asset.transactions.length > 1 ? 's' : ''}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </TableCell>
+                      <TableCell align="right">{asset.total_quantity.toLocaleString()}</TableCell>
+                      <TableCell align="right">{formatCurrency(asset.avg_cost_price)}</TableCell>
+                      <TableCell align="right">{formatCurrency(asset.current_price)}</TableCell>
+                      <TableCell align="right">
+                        <Typography fontWeight="medium">
+                          {formatCurrency(asset.total_current_value)}
+                        </Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end">
+                          {asset.total_gain_loss >= 0 ? (
+                            <TrendingUpIcon fontSize="small" color="success" />
+                          ) : (
+                            <TrendingDownIcon fontSize="small" color="error" />
+                          )}
+                          <Box>
+                            <Typography
+                              variant="body2"
+                              fontWeight="medium"
+                              color={asset.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
+                            >
+                              {formatCurrency(Math.abs(asset.total_gain_loss))}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color={asset.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
+                            >
+                              {(() => {
+                                const totalCost = asset.avg_cost_price * asset.total_quantity;
+                                const percentage = totalCost > 0 ? (asset.total_gain_loss / totalCost) * 100 : 0;
+                                return formatPercentage(percentage);
+                              })()}
+                            </Typography>
+                          </Box>
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+
+                    {/* Expanded Row - Transactions */}
+                    <TableRow>
+                      <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={6}>
+                        <Collapse in={expandedRows[asset.key]} timeout="auto" unmountOnExit>
+                          <Box sx={{ margin: 2 }}>
+                            <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+                              <Typography variant="subtitle2" gutterBottom component="div">
+                                Transaction History
+                              </Typography>
+                              <Button
+                                size="small"
+                                startIcon={<AddIcon />}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAddTransactionForSecurity(asset);
+                                }}
+                              >
+                                Add Transaction
+                              </Button>
+                            </Stack>
+                            <Table size="small">
+                              <TableHead>
+                                <TableRow>
+                                  <TableCell>Date</TableCell>
+                                  <TableCell>Type</TableCell>
+                                  <TableCell align="right">Quantity</TableCell>
+                                  <TableCell align="right">Price ({portfolio?.base_currency || 'USD'})</TableCell>
+                                  <TableCell align="right">Total ({portfolio?.base_currency || 'USD'})</TableCell>
+                                  <TableCell align="right">Gain/Loss</TableCell>
+                                  <TableCell align="center">Action</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {asset.transactions.map((transaction) => (
+                                  <TableRow key={transaction.id}>
+                                    <TableCell>{formatDate(transaction.date || transaction.transaction_date)}</TableCell>
+                                    <TableCell>
+                                      <Chip
+                                        label={transaction.transaction_type}
+                                        size="small"
+                                        color={getTransactionTypeColor(transaction.transaction_type)}
+                                      />
+                                    </TableCell>
+                                    <TableCell align="right">{transaction.quantity}</TableCell>
+                                    <TableCell align="right">{formatCurrency(transaction.price)}</TableCell>
+                                    <TableCell align="right">{formatCurrency(transaction.value)}</TableCell>
+                                    <TableCell align="right">
+                                      {transaction.transaction_type === 'DIVIDEND' ? (
+                                        <Typography variant="body2" color="info.main">
+                                          +{formatCurrency(transaction.value)}
+                                        </Typography>
+                                      ) : transaction.transaction_type === 'SELL' ? (
+                                        <Typography variant="body2" color="text.secondary">
+                                          Sold
+                                        </Typography>
+                                      ) : (
+                                        <Box>
+                                          <Typography
+                                            variant="body2"
+                                            color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
+                                          >
+                                            {formatCurrency(transaction.gain_loss || 0)}
+                                          </Typography>
+                                          {transaction.gain_loss_percentage !== undefined && transaction.gain_loss_percentage !== null && (
+                                            <Typography
+                                              variant="caption"
+                                              color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
+                                            >
+                                              {formatPercentage(transaction.gain_loss_percentage)}
+                                            </Typography>
+                                          )}
+                                        </Box>
+                                      )}
+                                    </TableCell>
+                                    <TableCell align="center">
+                                      <Tooltip title="Delete transaction">
+                                        <IconButton
+                                          size="small"
+                                          color="error"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteTransaction(transaction.id, asset.name);
+                                          }}
+                                        >
+                                          <DeleteIcon fontSize="small" />
+                                        </IconButton>
+                                      </Tooltip>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </Box>
+                        </Collapse>
+                      </TableCell>
+                    </TableRow>
+                  </React.Fragment>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Paper>
+
+      {/* Action Buttons */}
+      <Box sx={{ mt: 3 }}>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={handleOpenNewTransactionModal}
+        >
+          Add New Transaction
+        </Button>
+      </Box>
+
+      {/* Transaction Form Modal */}
+      <TransactionForm
+        open={showTransactionForm}
+        onClose={() => {
+          setShowTransactionForm(false);
+          setSelectedSecurity(null);
+        }}
+        portfolioId={portfolioId}
+        security={selectedSecurity}
+        onSuccess={handleTransactionSuccess}
+        existingHoldings={getHoldingsMap()}
+        portfolio={portfolio}
+      />
+    </Container>
   );
 };
 
-export default Dashboard;
+export default ConsolidatedPortfolioDetails;

@@ -17,7 +17,8 @@ import {
   CircularProgress,
   Paper,
   InputAdornment,
-  Tooltip
+  Tooltip,
+  Chip
 } from '@mui/material';
 import InfoIcon from '@mui/icons-material/Info';
 import { Search as SearchIcon, TrendingUp } from '@mui/icons-material';
@@ -33,7 +34,8 @@ const TransactionForm = ({
   portfolioId,
   security = null,
   transaction = null,
-  existingHoldings = null  // Add this prop to pass holdings from parent
+  existingHoldings = null,
+  portfolio = null  // Add portfolio prop to receive portfolio data including base_currency
 }) => {
   const [formData, setFormData] = useState({
     transaction_type: 'BUY',
@@ -46,7 +48,7 @@ const TransactionForm = ({
   });
 
   const [selectedSecurity, setSelectedSecurity] = useState(null);
-  const [portfolio, setPortfolio] = useState(null);
+  const [portfolioData, setPortfolioData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [exchangeRate, setExchangeRate] = useState(null);
@@ -62,7 +64,12 @@ const TransactionForm = ({
   const fetchPortfolio = useCallback(async () => {
     try {
       const response = await api.portfolios.get(portfolioId);
-      setPortfolio(response.data);
+      setPortfolioData(response.data);
+      // Set default currency to portfolio's base currency
+      setFormData(prev => ({
+        ...prev,
+        currency: response.data.base_currency || 'USD'
+      }));
     } catch (err) {
       console.error('Failed to fetch portfolio:', err);
     }
@@ -86,7 +93,16 @@ const TransactionForm = ({
 
   useEffect(() => {
     if (open) {
-      fetchPortfolio();
+      // Use provided portfolio or fetch it
+      if (portfolio) {
+        setPortfolioData(portfolio);
+        setFormData(prev => ({
+          ...prev,
+          currency: portfolio.base_currency || 'USD'
+        }));
+      } else {
+        fetchPortfolio();
+      }
 
       // Only fetch holdings if not provided via props
       if (!existingHoldings) {
@@ -105,7 +121,7 @@ const TransactionForm = ({
         setFormData(prev => ({
           ...prev,
           price: security.current_price?.toString() || '',
-          currency: security.currency || 'USD',
+          currency: portfolioData?.base_currency || portfolio?.base_currency || security.currency || 'USD',
           // Auto-fill quantity for dividends
           quantity: prev.transaction_type === 'DIVIDEND' && securityQuantity > 0
             ? securityQuantity.toString()
@@ -126,9 +142,9 @@ const TransactionForm = ({
         setSelectedSecurity(transaction.security);
       }
     }
-  }, [open, security, transaction, existingHoldings, fetchPortfolio, fetchPortfolioHoldings]);
+  }, [open, security, transaction, existingHoldings, portfolio, portfolioData, fetchPortfolio, fetchPortfolioHoldings]);
 
-    // Also update the form data when transaction type changes to DIVIDEND
+  // Also update the form data when transaction type changes to DIVIDEND
   useEffect(() => {
     if (formData.transaction_type === 'DIVIDEND' && selectedSecurity) {
       const holdingQuantity = portfolioHoldings[selectedSecurity.symbol] || selectedSecurity.total_quantity || 0;
@@ -185,7 +201,7 @@ const TransactionForm = ({
         setFormData(prev => ({
           ...prev,
           price: imported.current_price?.toString() || '',
-          currency: imported.currency || 'USD'
+          currency: portfolioData?.base_currency || portfolio?.base_currency || imported.currency || 'USD'
         }));
         setSearchOpen(false);
         setError('');
@@ -211,10 +227,13 @@ const TransactionForm = ({
         return;
       }
 
+      const currentPortfolio = portfolioData || portfolio;
+      const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
       const response = await api.currencies.convert({
         amount: amount,
         from_currency: formData.currency,
-        to_currency: portfolio.currency,
+        to_currency: portfolioCurrency,
         date: formData.transaction_date
       });
 
@@ -225,17 +244,20 @@ const TransactionForm = ({
       setExchangeRate(null);
       setConvertedAmount(null);
     }
-  }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, formData.transaction_type, portfolio]);
+  }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, formData.transaction_type, portfolioData, portfolio]);
 
   // Calculate exchange rate when currency changes
   useEffect(() => {
-    if (portfolio && formData.currency !== portfolio.currency && formData.price && formData.quantity) {
+    const currentPortfolio = portfolioData || portfolio;
+    const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
+    if (currentPortfolio && formData.currency !== portfolioCurrency && formData.price && formData.quantity) {
       fetchExchangeRate();
     } else {
       setExchangeRate(null);
       setConvertedAmount(null);
     }
-  }, [formData.currency, formData.price, formData.quantity, portfolio, fetchExchangeRate]);
+  }, [formData.currency, formData.price, formData.quantity, portfolioData, portfolio, fetchExchangeRate]);
 
   // Auto-calculate additional shares when split ratio changes
   useEffect(() => {
@@ -271,38 +293,38 @@ const TransactionForm = ({
   }, [formData.split_ratio, formData.transaction_type, selectedSecurity, portfolioHoldings]);
 
   const handleSubmit = async (e) => {
-  e.preventDefault();
-  setLoading(true);
-  setError('');
+    e.preventDefault();
+    setLoading(true);
+    setError('');
 
-  try {
-    const data = {
-      portfolio: portfolioId,
-      security: selectedSecurity.id,
-      ...formData,
-      quantity: parseFloat(formData.quantity),
-      price: parseFloat(formData.price || 0),
-      fees: parseFloat(formData.fees || 0),
-      currency: formData.currency,
-      split_ratio: formData.transaction_type === 'SPLIT' ? formData.split_ratio : undefined
-    };
+    try {
+      const data = {
+        portfolio: portfolioId,
+        security: selectedSecurity.id,
+        ...formData,
+        quantity: parseFloat(formData.quantity),
+        price: parseFloat(formData.price || 0),
+        fees: parseFloat(formData.fees || 0),
+        currency: formData.currency,
+        split_ratio: formData.transaction_type === 'SPLIT' ? formData.split_ratio : undefined
+      };
 
-    if (transaction) {
-      await api.transactions.update(transaction.id, data);
-    } else {
-      await api.transactions.create(data);
+      if (transaction) {
+        await api.transactions.update(transaction.id, data);
+      } else {
+        await api.transactions.create(data);
+      }
+
+      onSuccess();
+      onClose();
+      // Remove resetForm() call since the form is closing anyway
+    } catch (err) {
+      console.error('Transaction error:', err);
+      setError(err.response?.data?.detail || 'Failed to save transaction');
+    } finally {
+      setLoading(false);
     }
-
-    onSuccess();
-    onClose();
-    // Remove resetForm() call since the form is closing anyway
-  } catch (err) {
-    console.error('Transaction error:', err);
-    setError(err.response?.data?.detail || 'Failed to save transaction');
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const totalAmount = formData.transaction_type === 'DIVIDEND'
     ? parseFloat(formData.price || 0)  // For dividends, price IS the total amount
@@ -318,11 +340,27 @@ const TransactionForm = ({
       ? totalAmount + parseFloat(formData.fees || 0)  // Buy: add fees
       : totalAmount - parseFloat(formData.fees || 0); // Sell: subtract fees
 
+  // Get the current portfolio currency
+  const currentPortfolio = portfolioData || portfolio;
+  const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <form onSubmit={handleSubmit}>
         <DialogTitle>
-          {transaction ? 'Edit Transaction' : 'New Transaction'}
+          <Box display="flex" justifyContent="space-between" alignItems="center">
+            <Typography variant="h6">
+              {transaction ? 'Edit Transaction' : 'New Transaction'}
+            </Typography>
+            {currentPortfolio && (
+              <Chip
+                label={`Portfolio: ${portfolioCurrency}`}
+                size="small"
+                color="primary"
+                variant="outlined"
+              />
+            )}
+          </Box>
         </DialogTitle>
 
         <DialogContent>
@@ -346,7 +384,7 @@ const TransactionForm = ({
                     setFormData(prev => ({
                       ...prev,
                       price: newValue.current_price?.toString() || '',
-                      currency: newValue.currency || 'USD',
+                      currency: portfolioCurrency || newValue.currency || 'USD',
                       // Auto-fill quantity for dividends
                       quantity: prev.transaction_type === 'DIVIDEND' && holdingQuantity > 0
                         ? holdingQuantity.toString()
@@ -574,7 +612,7 @@ const TransactionForm = ({
             {formData.transaction_type !== 'SPLIT' && (
               <TextField
                 type="number"
-                label={formData.transaction_type === 'DIVIDEND' ? 'Total Dividend Amount' : 'Price per Unit'}
+                label={`${formData.transaction_type === 'DIVIDEND' ? 'Total Dividend Amount' : 'Price per Unit'} (${portfolioCurrency})`}
                 value={formData.price}
                 onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                 inputProps={{ step: "0.00000001", min: "0" }}
@@ -589,7 +627,7 @@ const TransactionForm = ({
                           showCode={false}
                         /></span>
                       : 'Enter the total dividend amount received'
-                    : ''
+                    : `Enter price in ${formData.currency}`
                 }
               />
             )}
@@ -599,12 +637,17 @@ const TransactionForm = ({
               onChange={(value) => setFormData({ ...formData, currency: value })}
               fullWidth
               label="Transaction Currency"
+              helperText={
+                formData.currency !== portfolioCurrency
+                  ? `Will be converted to ${portfolioCurrency} (portfolio currency)`
+                  : `Same as portfolio currency`
+              }
             />
 
             {formData.transaction_type !== 'SPLIT' && (
               <TextField
                 type="number"
-                label="Fees"
+                label={`Fees (${formData.currency})`}
                 value={formData.fees}
                 onChange={(e) => setFormData({ ...formData, fees: e.target.value })}
                 inputProps={{ step: "0.01", min: "0" }}
@@ -709,22 +752,22 @@ const TransactionForm = ({
                   </Typography>
                 </Box>
 
-                {portfolio && formData.currency !== portfolio.currency && convertedAmount && (
+                {currentPortfolio && formData.currency !== portfolioCurrency && convertedAmount && (
                   <>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2, pt: 2, borderTop: 1, borderColor: 'divider' }}>
                       <Typography variant="body2" color="text.secondary">
-                        Portfolio Currency ({portfolio.currency}):
+                        Portfolio Currency ({portfolioCurrency}):
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" color="text.secondary" fontWeight="bold">
                         <CurrencyDisplay
                           amount={convertedAmount}
-                          currency={portfolio.currency}
+                          currency={portfolioCurrency}
                           showCode={true}
                         />
                       </Typography>
                     </Box>
-                    <Typography variant="caption" color="text.secondary">
-                      Exchange Rate: 1 {formData.currency} = {exchangeRate?.toFixed(4)} {portfolio.currency}
+                    <Typography variant="caption" color="text.secondary" display="block" textAlign="right">
+                      Exchange Rate: 1 {formData.currency} = {exchangeRate?.toFixed(4)} {portfolioCurrency}
                     </Typography>
                   </>
                 )}

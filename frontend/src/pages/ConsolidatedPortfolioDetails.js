@@ -1,6 +1,42 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, Trash2 } from 'lucide-react';
+import { useParams, Link as RouterLink } from 'react-router-dom';
+import {
+  Box,
+  Container,
+  Typography,
+  Paper,
+  Grid,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  Button,
+  IconButton,
+  Collapse,
+  Alert,
+  CircularProgress,
+  Card,
+  CardContent,
+  Breadcrumbs,
+  Link,
+  Tooltip,
+  Badge
+} from '@mui/material';
+import {
+  ChevronRight as ChevronRightIcon,
+  ExpandMore as ExpandMoreIcon,
+  TrendingUp as TrendingUpIcon,
+  TrendingDown as TrendingDownIcon,
+  Delete as DeleteIcon,
+  Add as AddIcon,
+  AccountBalance as AccountBalanceIcon,
+  ShowChart as ShowChartIcon,
+  AttachMoney as AttachMoneyIcon,
+  AccountBalanceWallet as WalletIcon
+} from '@mui/icons-material';
 import api from '../services/api';
 import StockAutocomplete from '../components/StockAutocomplete';
 import CashManagement from '../components/CashManagement';
@@ -49,14 +85,11 @@ const ConsolidatedPortfolioDetails = () => {
     }));
   };
 
-  // Function to handle Add Transaction from expanded row
   const handleAddTransactionForSecurity = (asset) => {
-    // Get the first transaction to extract security ID
     const firstTransaction = asset.transactions && asset.transactions.length > 0
       ? asset.transactions[0]
       : null;
 
-    // Set selected security with all necessary information
     setSelectedSecurity({
       id: firstTransaction ? firstTransaction.stock_id : null,
       symbol: asset.symbol,
@@ -69,12 +102,10 @@ const ConsolidatedPortfolioDetails = () => {
     setShowTransactionForm(true);
   };
 
-  // Function to handle transaction deletion
   const handleDeleteTransaction = async (transactionId, securityName) => {
     if (window.confirm(`Are you sure you want to delete this transaction for ${securityName}?`)) {
       try {
         await api.transactions.delete(transactionId);
-        // Refresh the data after successful deletion
         fetchConsolidatedData();
       } catch (err) {
         console.error('Error deleting transaction:', err);
@@ -83,25 +114,22 @@ const ConsolidatedPortfolioDetails = () => {
     }
   };
 
-  // Function to handle opening modal for new transaction
   const handleOpenNewTransactionModal = () => {
     setSelectedSecurity(null);
     setShowTransactionForm(true);
   };
 
-  // Function to handle transaction success
   const handleTransactionSuccess = () => {
     setShowTransactionForm(false);
     setSelectedSecurity(null);
-    fetchConsolidatedData(); // Refresh the data
+    fetchConsolidatedData();
   };
 
-  const formatCurrency = (amount) => {
+  const formatCurrency = (amount, currency = null) => {
+    const currencyCode = currency || portfolio?.base_currency || 'USD';
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
+      currency: currencyCode
     }).format(amount || 0);
   };
 
@@ -116,13 +144,10 @@ const ConsolidatedPortfolioDetails = () => {
     if (!dateString) return 'N/A';
 
     try {
-      // Handle different date formats
       let date;
       if (dateString.includes('T')) {
-        // ISO format with time
         date = new Date(dateString);
       } else {
-        // Just date, assume UTC to avoid timezone issues
         date = new Date(dateString + 'T00:00:00Z');
       }
 
@@ -149,318 +174,416 @@ const ConsolidatedPortfolioDetails = () => {
     return holdings;
   };
 
+  const getTransactionTypeColor = (type) => {
+    const colors = {
+      'BUY': 'success',
+      'SELL': 'error',
+      'DIVIDEND': 'info',
+      'SPLIT': 'secondary'
+    };
+    return colors[type] || 'default';
+  };
+
   if (loading) {
     return (
-      <div className="flex justify-center items-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="80vh">
+        <CircularProgress size={60} />
+      </Box>
     );
   }
 
   if (error && !portfolio) {
     return (
-      <div className="max-w-7xl mx-auto p-6">
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+      <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+        <Alert severity="error" sx={{ mb: 2 }}>
           {error}
-        </div>
-        <Link to="/portfolios" className="text-blue-600 hover:text-blue-800">
-          ← Back to Portfolios
-        </Link>
-      </div>
+        </Alert>
+        <Button component={RouterLink} to="/portfolios" variant="text" startIcon={<ChevronRightIcon sx={{ transform: 'rotate(180deg)' }} />}>
+          Back to Portfolios
+        </Button>
+      </Container>
     );
   }
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      {/* Header */}
-      <div className="mb-6">
-        <Link to="/portfolios" className="text-blue-600 hover:text-blue-800 text-sm">
-          ← Back to Portfolios
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      {/* Breadcrumbs */}
+      <Breadcrumbs aria-label="breadcrumb" sx={{ mb: 2 }}>
+        <Link component={RouterLink} to="/portfolios" underline="hover" color="inherit">
+          Portfolios
         </Link>
-        <h1 className="text-3xl font-bold text-gray-900 mt-2">
-          {portfolio?.name || 'Portfolio Details'}
-        </h1>
+        <Typography color="text.primary">{portfolio?.name || 'Portfolio Details'}</Typography>
+      </Breadcrumbs>
+
+      {/* Header */}
+      <Box sx={{ mb: 4 }}>
+        <Box display="flex" alignItems="center" gap={2} mb={1}>
+          <Typography variant="h4" component="h1">
+            {portfolio?.name || 'Portfolio Details'}
+          </Typography>
+          <Chip
+            label={portfolio?.base_currency || 'USD'}
+            color="primary"
+            variant="outlined"
+            size="medium"
+            icon={<AttachMoneyIcon />}
+          />
+        </Box>
         {portfolio?.description && (
-          <p className="text-gray-600 mt-2">{portfolio.description}</p>
+          <Typography variant="body1" color="text.secondary">
+            {portfolio.description}
+          </Typography>
         )}
-      </div>
+      </Box>
 
-      {/* Two-column layout for summary and currency view */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        {/* Summary Cards Section */}
-        <div>
+      {/* Summary Cards and Currency View Grid */}
+      <Grid container spacing={3} sx={{ mb: 4 }}>
+        {/* Summary Cards */}
+        <Grid item xs={12} lg={6}>
           {summary && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-white p-6 rounded-lg shadow">
-                <h3 className="text-sm font-medium text-gray-500 mb-2">Total Value</h3>
-                <p className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(summary.total_value)}
-                </p>
-                <p className="text-xs text-gray-500 mt-1">
-                  Securities + Cash
-                </p>
-              </div>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <Card>
+                  <CardContent>
+                    <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Total Value
+                        </Typography>
+                        <Typography variant="h5" component="div" fontWeight="bold">
+                          {formatCurrency(summary.total_value)}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Securities + Cash
+                        </Typography>
+                      </Box>
+                      <WalletIcon color="primary" />
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
 
-              <div className="bg-white p-6 rounded-lg shadow">
-                <h3 className="text-sm font-medium text-gray-500 mb-2">Securities Value</h3>
-                <p className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(summary.securities_value || summary.total_value)}
-                </p>
-              </div>
+              <Grid item xs={12} sm={6}>
+                <Card>
+                  <CardContent>
+                    <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Securities Value
+                        </Typography>
+                        <Typography variant="h5" component="div" fontWeight="bold">
+                          {formatCurrency(summary.securities_value || summary.total_value)}
+                        </Typography>
+                      </Box>
+                      <ShowChartIcon color="primary" />
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
 
-              <div className="bg-white p-6 rounded-lg shadow">
-                <h3 className="text-sm font-medium text-gray-500 mb-2">Cash Balance</h3>
-                <p className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(summary.cash_balance || 0)}
-                </p>
-              </div>
+              <Grid item xs={12} sm={6}>
+                <Card>
+                  <CardContent>
+                    <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Cash Balance
+                        </Typography>
+                        <Typography variant="h5" component="div" fontWeight="bold">
+                          {formatCurrency(summary.cash_balance || 0)}
+                        </Typography>
+                      </Box>
+                      <AccountBalanceIcon color="primary" />
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
 
-              <div className="bg-white p-6 rounded-lg shadow">
-                <h3 className="text-sm font-medium text-gray-500 mb-2">Total Gain/Loss</h3>
-                <p className={`text-2xl font-bold ${summary.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {formatCurrency(summary.total_gain_loss)}
-                </p>
-                <p className={`text-sm ${summary.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {summary.total_cost > 0 ? formatPercentage((summary.total_gain_loss / summary.total_cost) * 100) : '0.00%'}
-                </p>
-              </div>
+              <Grid item xs={12} sm={6}>
+                <Card>
+                  <CardContent>
+                    <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Total Gain/Loss
+                        </Typography>
+                        <Typography
+                          variant="h5"
+                          component="div"
+                          fontWeight="bold"
+                          color={summary.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
+                        >
+                          {formatCurrency(summary.total_gain_loss)}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color={summary.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
+                        >
+                          {summary.total_cost > 0 ? formatPercentage((summary.total_gain_loss / summary.total_cost) * 100) : '0.00%'}
+                        </Typography>
+                      </Box>
+                      {summary.total_gain_loss >= 0 ? (
+                        <TrendingUpIcon color="success" />
+                      ) : (
+                        <TrendingDownIcon color="error" />
+                      )}
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
 
-              <div className="bg-white p-6 rounded-lg shadow col-span-2">
-                <h3 className="text-sm font-medium text-gray-500 mb-2">Total Dividends</h3>
-                <p className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(summary.total_dividends || 0)}
-                </p>
-              </div>
-            </div>
+              <Grid item xs={12}>
+                <Card>
+                  <CardContent>
+                    <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography color="text.secondary" gutterBottom variant="body2">
+                          Total Dividends
+                        </Typography>
+                        <Typography variant="h5" component="div" fontWeight="bold" color="info.main">
+                          {formatCurrency(summary.total_dividends || 0)}
+                        </Typography>
+                      </Box>
+                      <AttachMoneyIcon color="info" />
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </Grid>
           )}
-        </div>
+        </Grid>
 
-        {/* Currency View Section */}
-        <div>
+        {/* Currency View */}
+        <Grid item xs={12} lg={6}>
           {portfolio && (
             <PortfolioCurrencyView portfolio={portfolio} />
           )}
-        </div>
-      </div>
+        </Grid>
+      </Grid>
 
-      {/* Cash Management Section */}
+      {/* Cash Management */}
       {cashAccount && (
-        <div className="mb-8">
+        <Box sx={{ mb: 4 }}>
           <CashManagement
             portfolioId={portfolioId}
             cashBalance={cashAccount.balance}
-            currency={cashAccount.currency}
+            currency={portfolio?.base_currency || cashAccount.currency}
             onBalanceUpdate={fetchConsolidatedData}
+            portfolio={portfolio}
           />
-        </div>
+        </Box>
       )}
 
-      {/* Consolidated Assets Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-xl font-bold text-gray-900">
+      {/* Securities Holdings Table */}
+      <Paper sx={{ mb: 3 }}>
+        <Box sx={{ p: 3, borderBottom: 1, borderColor: 'divider' }}>
+          <Typography variant="h6" component="h2" gutterBottom>
             Securities Holdings
-          </h2>
-          <p className="text-sm text-gray-500 mt-1">
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
             Click on any row to see individual transactions
-          </p>
-        </div>
+          </Typography>
+        </Box>
 
         {consolidatedAssets.length === 0 ? (
-          <div className="px-6 py-12 text-center">
-            <p className="text-gray-500">No securities in this portfolio yet.</p>
-            <p className="text-gray-500 mt-2">Add securities to start tracking your investments.</p>
-          </div>
+          <Box sx={{ p: 6, textAlign: 'center' }}>
+            <Typography color="text.secondary" gutterBottom>
+              No securities in this portfolio yet.
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Add securities to start tracking your investments.
+            </Typography>
+          </Box>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Asset
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Quantity
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Avg Cost
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Current Price
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Total Value
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Gain/Loss
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+          <TableContainer>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Asset</TableCell>
+                  <TableCell align="right">Quantity</TableCell>
+                  <TableCell align="right">Avg Cost ({portfolio?.base_currency || 'USD'})</TableCell>
+                  <TableCell align="right">Current Price ({portfolio?.base_currency || 'USD'})</TableCell>
+                  <TableCell align="right">Total Value ({portfolio?.base_currency || 'USD'})</TableCell>
+                  <TableCell align="right">Gain/Loss ({portfolio?.base_currency || 'USD'})</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {consolidatedAssets.map((asset) => (
                   <React.Fragment key={asset.key}>
-                    <tr
+                    <TableRow
+                      hover
                       onClick={() => toggleRow(asset.key)}
-                      className="hover:bg-gray-50 cursor-pointer"
+                      sx={{ cursor: 'pointer', '& > *': { borderBottom: 'unset' } }}
                     >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div className="mr-3">
-                            {expandedRows[asset.key] ?
-                              <ChevronDown className="w-5 h-5 text-gray-400" /> :
-                              <ChevronRight className="w-5 h-5 text-gray-400" />
-                            }
-                          </div>
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">
+                      <TableCell>
+                        <Box display="flex" alignItems="center">
+                          <IconButton size="small" sx={{ mr: 1 }}>
+                            {expandedRows[asset.key] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+                          </IconButton>
+                          <Box>
+                            <Typography variant="body2" fontWeight="medium">
                               {asset.symbol ? `${asset.symbol} - ${asset.name}` : asset.name}
-                            </div>
-                            <div className="text-sm text-gray-500">
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
                               {asset.asset_type} • {asset.transactions.length} transaction{asset.transactions.length > 1 ? 's' : ''}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">
-                        {asset.total_quantity.toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">
-                        {formatCurrency(asset.avg_cost_price)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">
-                        {formatCurrency(asset.current_price)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-gray-900">
-                        {formatCurrency(asset.total_current_value)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right">
-                        <div className={`text-sm font-medium ${asset.total_gain_loss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          <div className="flex items-center justify-end">
-                            {asset.total_gain_loss >= 0 ? (
-                              <TrendingUp className="w-4 h-4 mr-1" />
-                            ) : (
-                              <TrendingDown className="w-4 h-4 mr-1" />
-                            )}
-                            {formatCurrency(Math.abs(asset.total_gain_loss))}
-                          </div>
-                          <div className="text-xs">
-                            {(() => {
-                              // Calculate percentage from gain/loss and total cost
-                              const totalCost = asset.avg_cost_price * asset.total_quantity;
-                              const percentage = totalCost > 0 ? (asset.total_gain_loss / totalCost) * 100 : 0;
-                              return formatPercentage(percentage);
-                            })()}
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </TableCell>
+                      <TableCell align="right">{asset.total_quantity.toLocaleString()}</TableCell>
+                      <TableCell align="right">{formatCurrency(asset.avg_cost_price)}</TableCell>
+                      <TableCell align="right">{formatCurrency(asset.current_price)}</TableCell>
+                      <TableCell align="right">
+                        <Typography fontWeight="medium">
+                          {formatCurrency(asset.total_current_value)}
+                        </Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Box display="flex" alignItems="center" justifyContent="flex-end">
+                          {asset.total_gain_loss >= 0 ? (
+                            <TrendingUpIcon sx={{ fontSize: 20, mr: 0.5 }} color="success" />
+                          ) : (
+                            <TrendingDownIcon sx={{ fontSize: 20, mr: 0.5 }} color="error" />
+                          )}
+                          <Box>
+                            <Typography
+                              variant="body2"
+                              fontWeight="medium"
+                              color={asset.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
+                            >
+                              {formatCurrency(Math.abs(asset.total_gain_loss))}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color={asset.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
+                            >
+                              {(() => {
+                                const totalCost = asset.avg_cost_price * asset.total_quantity;
+                                const percentage = totalCost > 0 ? (asset.total_gain_loss / totalCost) * 100 : 0;
+                                return formatPercentage(percentage);
+                              })()}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
 
                     {/* Expanded Row - Transactions */}
-                    {expandedRows[asset.key] && (
-                      <tr>
-                        <td colSpan="6" className="px-6 py-4 bg-gray-50">
-                          <div className="mb-3 flex justify-between items-center">
-                            <h4 className="text-sm font-medium text-gray-700">Transaction History</h4>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleAddTransactionForSecurity(asset);
-                              }}
-                              className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                            >
-                              + Add Transaction
-                            </button>
-                          </div>
-                          <div className="overflow-hidden">
-                            <table className="min-w-full">
-                              <thead>
-                                <tr className="text-xs text-gray-500 uppercase">
-                                  <th className="text-left py-2">Date</th>
-                                  <th className="text-left py-2">Type</th>
-                                  <th className="text-right py-2">Quantity</th>
-                                  <th className="text-right py-2">Price</th>
-                                  <th className="text-right py-2">Total</th>
-                                  <th className="text-right py-2">Gain/Loss</th>
-                                  <th className="text-right py-2">Action</th>
-                                </tr>
-                              </thead>
-                              <tbody className="text-sm">
+                    <TableRow>
+                      <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={6}>
+                        <Collapse in={expandedRows[asset.key]} timeout="auto" unmountOnExit>
+                          <Box sx={{ margin: 2 }}>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                              <Typography variant="subtitle2" gutterBottom component="div">
+                                Transaction History
+                              </Typography>
+                              <Button
+                                size="small"
+                                startIcon={<AddIcon />}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAddTransactionForSecurity(asset);
+                                }}
+                              >
+                                Add Transaction
+                              </Button>
+                            </Box>
+                            <Table size="small">
+                              <TableHead>
+                                <TableRow>
+                                  <TableCell>Date</TableCell>
+                                  <TableCell>Type</TableCell>
+                                  <TableCell align="right">Quantity</TableCell>
+                                  <TableCell align="right">Price ({portfolio?.base_currency || 'USD'})</TableCell>
+                                  <TableCell align="right">Total ({portfolio?.base_currency || 'USD'})</TableCell>
+                                  <TableCell align="right">Gain/Loss</TableCell>
+                                  <TableCell align="center">Action</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
                                 {asset.transactions.map((transaction) => (
-                                  <tr key={transaction.id} className="border-t border-gray-200">
-                                    <td className="py-2">{formatDate(transaction.date || transaction.transaction_date)}</td>
-                                    <td className="py-2">
-                                      <span className={`px-2 py-1 rounded text-xs ${
-                                        transaction.transaction_type === 'BUY' ? 'bg-green-100 text-green-800' :
-                                        transaction.transaction_type === 'SELL' ? 'bg-red-100 text-red-800' :
-                                        transaction.transaction_type === 'DIVIDEND' ? 'bg-blue-100 text-blue-800' :
-                                        transaction.transaction_type === 'SPLIT' ? 'bg-purple-100 text-purple-800' :
-                                        'bg-gray-100 text-gray-800'
-                                      }`}>
-                                        {transaction.transaction_type}
-                                      </span>
-                                    </td>
-                                    <td className="text-right py-2">{transaction.quantity}</td>
-                                    <td className="text-right py-2">{formatCurrency(transaction.price)}</td>
-                                    <td className="text-right py-2">{formatCurrency(transaction.value)}</td>
-                                    <td className={`text-right py-2 font-medium ${
-                                      transaction.transaction_type === 'DIVIDEND' ? 'text-blue-600' :
-                                      transaction.transaction_type === 'SELL' ? 'text-gray-600' :
-                                      transaction.gain_loss >= 0 ? 'text-green-600' : 'text-red-600'
-                                    }`}>
+                                  <TableRow key={transaction.id}>
+                                    <TableCell>{formatDate(transaction.date || transaction.transaction_date)}</TableCell>
+                                    <TableCell>
+                                      <Chip
+                                        label={transaction.transaction_type}
+                                        size="small"
+                                        color={getTransactionTypeColor(transaction.transaction_type)}
+                                      />
+                                    </TableCell>
+                                    <TableCell align="right">{transaction.quantity}</TableCell>
+                                    <TableCell align="right">{formatCurrency(transaction.price)}</TableCell>
+                                    <TableCell align="right">{formatCurrency(transaction.value)}</TableCell>
+                                    <TableCell align="right">
                                       {transaction.transaction_type === 'DIVIDEND' ? (
-                                        <span className="text-blue-600">+{formatCurrency(transaction.value)}</span>
+                                        <Typography variant="body2" color="info.main">
+                                          +{formatCurrency(transaction.value)}
+                                        </Typography>
                                       ) : transaction.transaction_type === 'SELL' ? (
-                                        <span className="text-gray-600">Sold</span>
+                                        <Typography variant="body2" color="text.secondary">
+                                          Sold
+                                        </Typography>
                                       ) : (
-                                        <>
-                                          {formatCurrency(transaction.gain_loss || 0)}
+                                        <Box>
+                                          <Typography
+                                            variant="body2"
+                                            color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
+                                          >
+                                            {formatCurrency(transaction.gain_loss || 0)}
+                                          </Typography>
                                           {transaction.gain_loss_percentage !== undefined && transaction.gain_loss_percentage !== null && (
-                                            <div className="text-xs">
+                                            <Typography
+                                              variant="caption"
+                                              color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
+                                            >
                                               {formatPercentage(transaction.gain_loss_percentage)}
-                                            </div>
+                                            </Typography>
                                           )}
-                                        </>
+                                        </Box>
                                       )}
-                                    </td>
-                                    <td className="text-right py-2">
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleDeleteTransaction(transaction.id, asset.name);
-                                        }}
-                                        className="text-red-600 hover:text-red-800 transition-colors"
-                                        title="Delete transaction"
-                                      >
-                                        <Trash2 className="w-4 h-4" />
-                                      </button>
-                                    </td>
-                                  </tr>
+                                    </TableCell>
+                                    <TableCell align="center">
+                                      <Tooltip title="Delete transaction">
+                                        <IconButton
+                                          size="small"
+                                          color="error"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteTransaction(transaction.id, asset.name);
+                                          }}
+                                        >
+                                          <DeleteIcon fontSize="small" />
+                                        </IconButton>
+                                      </Tooltip>
+                                    </TableCell>
+                                  </TableRow>
                                 ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
+                              </TableBody>
+                            </Table>
+                          </Box>
+                        </Collapse>
+                      </TableCell>
+                    </TableRow>
                   </React.Fragment>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </TableContainer>
         )}
-      </div>
+      </Paper>
 
-      {/* Action Buttons - Updated */}
-      <div className="mt-6 flex space-x-4">
-        <button
+      {/* Action Buttons */}
+      <Box sx={{ mt: 3 }}>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
           onClick={handleOpenNewTransactionModal}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md"
         >
           Add New Transaction
-        </button>
-      </div>
+        </Button>
+      </Box>
 
-      {/* Use TransactionForm instead of inline modal */}
+      {/* Transaction Form Modal */}
       <TransactionForm
         open={showTransactionForm}
         onClose={() => {
@@ -471,8 +594,9 @@ const ConsolidatedPortfolioDetails = () => {
         security={selectedSecurity}
         onSuccess={handleTransactionSuccess}
         existingHoldings={getHoldingsMap()}
+        portfolio={portfolio}
       />
-    </div>
+    </Container>
   );
 };
 

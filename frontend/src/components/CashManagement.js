@@ -24,7 +24,8 @@ import {
   IconButton,
   CircularProgress,
   InputAdornment,
-  Tooltip
+  Tooltip,
+  Stack
 } from '@mui/material';
 import {
   AccountBalance as AccountBalanceIcon,
@@ -34,11 +35,12 @@ import {
   TrendingUp,
   TrendingDown,
   AttachMoney,
-  Delete as DeleteIcon
+  Delete as DeleteIcon,
+  CurrencyExchange as CurrencyExchangeIcon
 } from '@mui/icons-material';
 import api from '../services/api';
 
-const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBalanceUpdate }) => {
+const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBalanceUpdate, portfolio = null }) => {
   const [open, setOpen] = useState(false);
   const [transactionType, setTransactionType] = useState('DEPOSIT');
   const [amount, setAmount] = useState('');
@@ -53,6 +55,9 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
   const [transactionToDelete, setTransactionToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [transactionDate, setTransactionDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Get the portfolio currency from portfolio prop or use the currency prop
+  const portfolioCurrency = portfolio?.base_currency || currency || 'USD';
 
   useEffect(() => {
     if (tabValue === 1) {
@@ -95,18 +100,18 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
 
   const handleDeleteConfirm = async () => {
     if (!transactionToDelete) return;
-    
+
     setDeleting(true);
     try {
       await api.cash.delete(transactionToDelete.id);
       setSuccess(`Transaction deleted successfully`);
-      
+
       // Refresh data
       if (onBalanceUpdate) {
         onBalanceUpdate();
       }
       fetchCashHistory();
-      
+
       setDeleteConfirmOpen(false);
       setTransactionToDelete(null);
     } catch (err) {
@@ -141,7 +146,8 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
       await endpoint(portfolioId, {
         amount: numAmount,
         description: description || `Cash ${transactionType.toLowerCase()}`,
-        transaction_date: transactionDate // Add this line
+        transaction_date: transactionDate,
+        currency: portfolioCurrency // Pass the portfolio currency
       });
 
       setSuccess(`Successfully ${transactionType === 'DEPOSIT' ? 'deposited' : 'withdrew'} ${formatCurrency(numAmount)}`);
@@ -171,10 +177,11 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
     }
   };
 
-  const formatCurrency = (amount) => {
+  const formatCurrency = (amount, currencyCode = null) => {
+    const displayCurrency = currencyCode || portfolioCurrency;
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
-      currency: currency || 'USD'
+      currency: displayCurrency
     }).format(amount);
   };
 
@@ -184,15 +191,16 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
       'WITHDRAWAL': { color: 'error', icon: <RemoveIcon fontSize="small" /> },
       'BUY': { color: 'primary', icon: <TrendingDown fontSize="small" /> },
       'SELL': { color: 'secondary', icon: <TrendingUp fontSize="small" /> },
-      'DIVIDEND': { color: 'success', icon: <AttachMoney fontSize="small" /> },
+      'DIVIDEND': { color: 'info', icon: <AttachMoney fontSize="small" /> },
       'FEE': { color: 'warning', icon: <RemoveIcon fontSize="small" /> },
+      'CURRENCY_CONVERSION': { color: 'default', icon: <CurrencyExchangeIcon fontSize="small" /> },
     };
 
     const { color, icon } = config[type] || { color: 'default', icon: null };
 
     return (
       <Chip
-        label={type}
+        label={type.replace('_', ' ')}
         color={color}
         size="small"
         icon={icon}
@@ -208,15 +216,20 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
   return (
     <Card sx={{ mb: 3 }}>
       <CardContent>
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-          <Box display="flex" alignItems="center" gap={2}>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+          <Stack direction="row" alignItems="center" spacing={2}>
             <AccountBalanceIcon color="primary" />
-            <Typography variant="h6">Cash Account</Typography>
-          </Box>
+            <Box>
+              <Typography variant="h6">Cash Account</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Portfolio Currency: {portfolioCurrency}
+              </Typography>
+            </Box>
+          </Stack>
           <Typography variant="h5" fontWeight="bold" color="primary">
             {formatCurrency(cashBalance)}
           </Typography>
-        </Box>
+        </Stack>
 
         <Box display="flex" gap={2} mb={3}>
           <Button
@@ -255,6 +268,9 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
             <Typography variant="body2" color="textSecondary">
               Manage your portfolio's cash balance. Deposit funds to buy securities or withdraw excess cash.
             </Typography>
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
+              All transactions are recorded in {portfolioCurrency}.
+            </Typography>
           </Box>
         )}
 
@@ -275,8 +291,8 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                     <TableCell>Date</TableCell>
                     <TableCell>Type</TableCell>
                     <TableCell>Description</TableCell>
-                    <TableCell align="right">Amount</TableCell>
-                    <TableCell align="right">Balance After</TableCell>
+                    <TableCell align="right">Amount ({portfolioCurrency})</TableCell>
+                    <TableCell align="right">Balance After ({portfolioCurrency})</TableCell>
                     <TableCell align="center">Actions</TableCell>
                   </TableRow>
                 </TableHead>
@@ -291,6 +307,11 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                         <Typography variant="body2">{transaction.description}</Typography>
                         {transaction.is_auto_deposit && (
                           <Chip label="Auto-deposit" size="small" color="info" sx={{ ml: 1 }} />
+                        )}
+                        {transaction.related_transaction && (
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            Related: {transaction.related_transaction.symbol || 'Security Transaction'}
+                          </Typography>
                         )}
                       </TableCell>
                       <TableCell align="right">
@@ -335,7 +356,17 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
         {/* Transaction Dialog */}
         <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
           <DialogTitle>
-            {transactionType === 'DEPOSIT' ? 'Deposit Cash' : 'Withdraw Cash'}
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Typography variant="h6">
+                {transactionType === 'DEPOSIT' ? 'Deposit Cash' : 'Withdraw Cash'}
+              </Typography>
+              <Chip
+                label={portfolioCurrency}
+                size="small"
+                color="primary"
+                variant="outlined"
+              />
+            </Stack>
           </DialogTitle>
           <DialogContent>
             {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -344,7 +375,7 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
             <TextField
               autoFocus
               margin="dense"
-              label="Amount"
+              label={`Amount (${portfolioCurrency})`}
               type="number"
               fullWidth
               variant="outlined"
@@ -354,11 +385,12 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                 startAdornment: (
                   <InputAdornment position="start">
                     <Typography color="textSecondary">
-                      {currency}
+                      {portfolioCurrency}
                     </Typography>
                   </InputAdornment>
                 )
               }}
+              helperText={`Enter amount in ${portfolioCurrency}`}
               sx={{ mb: 2 }}
             />
 
@@ -395,6 +427,31 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                 Insufficient cash balance. Current balance: {formatCurrency(cashBalance)}
               </Alert>
             )}
+
+            {/* Transaction Summary */}
+            {amount && parseFloat(amount) > 0 && (
+              <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Transaction Summary
+                </Typography>
+                <Stack direction="row" justifyContent="space-between" mb={1}>
+                  <Typography variant="body2">Amount:</Typography>
+                  <Typography variant="body2" fontWeight="bold">
+                    {formatCurrency(parseFloat(amount))}
+                  </Typography>
+                </Stack>
+                <Stack direction="row" justifyContent="space-between">
+                  <Typography variant="body2">New Balance:</Typography>
+                  <Typography variant="body2" fontWeight="bold" color={transactionType === 'DEPOSIT' ? 'success.main' : 'error.main'}>
+                    {formatCurrency(
+                      transactionType === 'DEPOSIT'
+                        ? cashBalance + parseFloat(amount)
+                        : cashBalance - parseFloat(amount)
+                    )}
+                  </Typography>
+                </Stack>
+              </Box>
+            )}
           </DialogContent>
           <DialogActions>
             <Button onClick={handleClose} disabled={loading}>
@@ -404,7 +461,8 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
               onClick={handleSubmit}
               variant="contained"
               color={transactionType === 'DEPOSIT' ? 'success' : 'error'}
-              disabled={loading || !amount}
+              disabled={loading || !amount || parseFloat(amount) <= 0}
+              startIcon={transactionType === 'DEPOSIT' ? <AddIcon /> : <RemoveIcon />}
             >
               {loading ? <CircularProgress size={24} /> : transactionType}
             </Button>
@@ -447,6 +505,7 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
               variant="contained"
               color="error"
               disabled={deleting}
+              startIcon={<DeleteIcon />}
             >
               {deleting ? <CircularProgress size={24} /> : 'Delete'}
             </Button>

@@ -128,6 +128,7 @@ export const portfolioAPI = {
   getCashHistory: (portfolioId) => API.get(`portfolios/${portfolioId}/cash_history/`),
 
   // Currency-related portfolio operations
+  supported_currencies: () => API.get('portfolios/supported_currencies/'),
   getValueInCurrency: (id, currency, date = null) => {
     const params = { currency };
     if (date) params.date = date;
