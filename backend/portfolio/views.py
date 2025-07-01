@@ -210,23 +210,21 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         if amount <= 0:
             return Response({'error': 'Amount must be positive'}, status=400)
 
-        # Get or create cash account using the correct approach
-        from .models import CashAccount
-        cash_account, created = CashAccount.objects.get_or_create(
+        # Get or create cash account using the correct model name
+        from .models import PortfolioCashAccount, CashTransaction
+        cash_account, created = PortfolioCashAccount.objects.get_or_create(
             portfolio=portfolio,
-            defaults={'balance': Decimal('0')}
+            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
         )
 
-        # Use portfolio's base currency
-        transaction_currency = portfolio.base_currency
-
+        # Create cash transaction
         transaction = CashTransaction.objects.create(
-            portfolio=portfolio,
+            cash_account=cash_account,
+            user=request.user,
             transaction_type='DEPOSIT',
             amount=amount,
-            currency=transaction_currency,  # Use portfolio's base currency
             description=request.data.get('description', 'Cash deposit'),
-            transaction_date=request.data.get('transaction_date', timezone.now().date()),
+            transaction_date=request.data.get('transaction_date', timezone.now()),
             balance_after=cash_account.balance + amount
         )
 
@@ -246,26 +244,24 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         if amount <= 0:
             return Response({'error': 'Amount must be positive'}, status=400)
 
-        # Get or create cash account
-        from .models import CashAccount
-        cash_account, created = CashAccount.objects.get_or_create(
+        # Get or create cash account using the correct model name
+        from .models import PortfolioCashAccount, CashTransaction
+        cash_account, created = PortfolioCashAccount.objects.get_or_create(
             portfolio=portfolio,
-            defaults={'balance': Decimal('0')}
+            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
         )
 
         if cash_account.balance < amount:
             return Response({'error': 'Insufficient balance'}, status=400)
 
-        # Use portfolio's base currency
-        transaction_currency = portfolio.base_currency
-
+        # Create cash transaction
         transaction = CashTransaction.objects.create(
-            portfolio=portfolio,
+            cash_account=cash_account,
+            user=request.user,
             transaction_type='WITHDRAWAL',
             amount=-amount,  # Negative for withdrawal
-            currency=transaction_currency,  # Use portfolio's base currency
             description=request.data.get('description', 'Cash withdrawal'),
-            transaction_date=request.data.get('transaction_date', timezone.now().date()),
+            transaction_date=request.data.get('transaction_date', timezone.now()),
             balance_after=cash_account.balance - amount
         )
 
@@ -321,6 +317,24 @@ class PortfolioViewSet(viewsets.ModelViewSet):
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+    @action(detail=False, methods=['get'])
+    def supported_currencies(self, request):
+        """Get list of supported currencies for portfolios"""
+        # First try to get active currencies from database
+        currencies_qs = Currency.objects.filter(is_active=True).values_list('code', flat=True)
+
+        if currencies_qs.exists():
+            currencies = list(currencies_qs)
+        else:
+            # Fallback to settings if no currencies in database
+            currencies = getattr(settings, 'SUPPORTED_CURRENCIES',
+                                 ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY'])
+
+        return Response({
+            'currencies': currencies,
+            'default': getattr(settings, 'DEFAULT_CURRENCY', 'USD')
+        })
 
     @action(detail=True, methods=['get'])
     def currency_exposure(self, request, pk=None):

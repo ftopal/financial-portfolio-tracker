@@ -19,7 +19,8 @@ import {
   Box
 } from '@mui/material';
 import { Refresh as RefreshIcon } from '@mui/icons-material';
-import { currencyAPI } from '../services/api';  // Import the currencyAPI directly
+import { currencyAPI } from '../services/api';
+import { extractDataArray } from '../utils/apiHelpers';
 
 const CurrencyManager = ({ open, onClose }) => {
   const [exchangeRates, setExchangeRates] = useState([]);
@@ -44,8 +45,8 @@ const CurrencyManager = ({ open, onClose }) => {
 
       console.log('Exchange rates response:', response);
 
-      // Handle the response data
-      const rates = response.data || [];
+      // Use the helper to extract data array
+      const rates = extractDataArray(response);
       setExchangeRates(rates);
     } catch (err) {
       console.error('Failed to fetch exchange rates:', err);

@@ -21,6 +21,7 @@ import {
   Visibility as VisibilityIcon
 } from '@mui/icons-material';
 import { api } from '../services/api';
+import { extractDataArray } from '../utils/apiHelpers';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -33,17 +34,23 @@ const Dashboard = () => {
   }, []);
 
   const fetchPortfolios = async () => {
-    try {
-      setLoading(true);
-      const response = await api.portfolios.getAll();
-      setPortfolios(response.data);
-    } catch (err) {
-      console.error('Error fetching portfolios:', err);
-      setError('Failed to load portfolios');
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    setLoading(true);
+    const response = await api.portfolios.getAll();
+
+    // Use the helper to extract data array
+    const portfoliosData = extractDataArray(response);
+    setPortfolios(portfoliosData);
+
+    setError('');
+  } catch (err) {
+    console.error('Error fetching portfolios:', err);
+    setError('Failed to load portfolios');
+    setPortfolios([]);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const formatCurrency = (amount, currency = 'USD') => {
     return new Intl.NumberFormat('en-US', {
@@ -58,6 +65,11 @@ const Dashboard = () => {
 
   // Calculate totals across all portfolios
   const calculateTotals = () => {
+    // Check if portfolios is an array before using reduce
+    if (!Array.isArray(portfolios)) {
+      return { totalValue: 0, totalGainLoss: 0, totalCash: 0 };
+    }
+
     return portfolios.reduce((acc, portfolio) => {
       acc.totalValue += parseFloat(portfolio.total_value_with_cash || portfolio.total_value || 0);
       acc.totalGainLoss += parseFloat(portfolio.total_gain_loss || 0);

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { PlusCircle } from 'lucide-react';
 import api from '../services/api';
 import PortfolioDialog from '../components/PortfolioDialog';
+import { extractDataArray } from '../utils/apiHelpers';
 
 const Portfolios = () => {
   const [portfolios, setPortfolios] = useState([]);
@@ -19,11 +20,13 @@ const Portfolios = () => {
     try {
       setLoading(true);
       const response = await api.portfolios.getAll();
-      setPortfolios(response.data);
+      const portfoliosData = extractDataArray(response);
+      setPortfolios(portfoliosData);
       setError('');
     } catch (err) {
       setError('Failed to load portfolios');
       console.error(err);
+      setPortfolios([]);
     } finally {
       setLoading(false);
     }

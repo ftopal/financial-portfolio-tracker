@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../services/api';
 import StockAutocomplete from '../components/StockAutocomplete';
+import {extractDataArray} from "../utils/apiHelpers";
 
 
 const PortfolioDetails = () => {
@@ -55,10 +56,12 @@ const PortfolioDetails = () => {
 
   const fetchCategories = async () => {
     try {
-      const response = await api.categories.getAll();  // Use new API
-      setCategories(response.data);
+      const response = await api.categories.getAll();
+      const categoriesData = extractDataArray(response);
+      setCategories(categoriesData);
     } catch (err) {
       console.error('Error fetching categories:', err);
+      setCategories([]);
     }
   };
 

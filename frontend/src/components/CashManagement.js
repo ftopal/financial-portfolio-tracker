@@ -39,6 +39,7 @@ import {
   CurrencyExchange as CurrencyExchangeIcon
 } from '@mui/icons-material';
 import api from '../services/api';
+import { extractDataArray } from '../utils/apiHelpers';
 
 const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBalanceUpdate, portfolio = null }) => {
   const [open, setOpen] = useState(false);
@@ -69,9 +70,12 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
     setHistoryLoading(true);
     try {
       const response = await api.portfolios.getCashHistory(portfolioId);
-      setCashHistory(response.data);
+      // Use the helper to extract data array
+      const cashHistoryData = extractDataArray(response);
+      setCashHistory(cashHistoryData);
     } catch (err) {
       console.error('Error fetching cash history:', err);
+      setCashHistory([]); // Set empty array on error
     } finally {
       setHistoryLoading(false);
     }

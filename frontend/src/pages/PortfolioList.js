@@ -23,6 +23,7 @@ import {
   AccountBalance as AccountBalanceIcon
 } from '@mui/icons-material';
 import { api } from '../services/api';
+import { extractDataArray } from '../utils/apiHelpers';
 
 const PortfolioList = () => {
   const [portfolios, setPortfolios] = useState([]);
@@ -38,9 +39,11 @@ const PortfolioList = () => {
     try {
       setLoading(true);
       const response = await api.portfolios.getAll();
-      setPortfolios(response.data);
+      const portfoliosData = extractDataArray(response);
+      setPortfolios(portfoliosData);
     } catch (err) {
       console.error('Error fetching portfolios:', err);
+      setPortfolios([]);
     } finally {
       setLoading(false);
     }
