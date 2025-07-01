@@ -203,92 +203,78 @@ class PortfolioViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def deposit_cash(self, request, pk=None):
-        """Deposit cash into portfolio"""
+        """Deposit cash to portfolio"""
         portfolio = self.get_object()
-        amount = Decimal(request.data.get('amount', 0))
-        description = request.data.get('description', 'Cash deposit')
-
-        # Get transaction date from request or use current time
-        transaction_date_str = request.data.get('transaction_date')
-        if transaction_date_str:
-            try:
-                # Parse the date string and add current time
-                from datetime import datetime
-                transaction_date = datetime.strptime(transaction_date_str, '%Y-%m-%d')
-                # Make it timezone aware
-                transaction_date = timezone.make_aware(transaction_date)
-            except ValueError:
-                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
-        else:
-            transaction_date = timezone.now()
+        amount = Decimal(str(request.data.get('amount', 0)))
 
         if amount <= 0:
             return Response({'error': 'Amount must be positive'}, status=400)
 
-        # Validate that date is not in the future
-        if transaction_date > timezone.now():
-            return Response({'error': 'Transaction date cannot be in the future'}, status=400)
-
-        # Create cash transaction
-        cash_transaction = CashTransaction.objects.create(
-            cash_account=portfolio.cash_account,
-            user=request.user,
-            transaction_type='DEPOSIT',
-            amount=amount,
-            description=description,
-            transaction_date=transaction_date  # Use the provided date
+        # Get or create cash account using the correct approach
+        from .models import CashAccount
+        cash_account, created = CashAccount.objects.get_or_create(
+            portfolio=portfolio,
+            defaults={'balance': Decimal('0')}
         )
 
-        # Update balance
-        portfolio.cash_account.update_balance(amount)
+        # Use portfolio's base currency
+        transaction_currency = portfolio.base_currency
 
-        return Response(CashTransactionSerializer(cash_transaction).data)
+        transaction = CashTransaction.objects.create(
+            portfolio=portfolio,
+            transaction_type='DEPOSIT',
+            amount=amount,
+            currency=transaction_currency,  # Use portfolio's base currency
+            description=request.data.get('description', 'Cash deposit'),
+            transaction_date=request.data.get('transaction_date', timezone.now().date()),
+            balance_after=cash_account.balance + amount
+        )
+
+        # Update cash account balance
+        cash_account.balance += amount
+        cash_account.save()
+
+        serializer = CashTransactionSerializer(transaction)
+        return Response(serializer.data, status=201)
 
     @action(detail=True, methods=['post'])
     def withdraw_cash(self, request, pk=None):
         """Withdraw cash from portfolio"""
         portfolio = self.get_object()
-        amount = Decimal(request.data.get('amount', 0))
-        description = request.data.get('description', 'Cash withdrawal')
-
-        # Get transaction date from request or use current time
-        transaction_date_str = request.data.get('transaction_date')
-        if transaction_date_str:
-            try:
-                # Parse the date string and add current time
-                from datetime import datetime
-                transaction_date = datetime.strptime(transaction_date_str, '%Y-%m-%d')
-                # Make it timezone aware
-                transaction_date = timezone.make_aware(transaction_date)
-            except ValueError:
-                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
-        else:
-            transaction_date = timezone.now()
+        amount = Decimal(str(request.data.get('amount', 0)))
 
         if amount <= 0:
             return Response({'error': 'Amount must be positive'}, status=400)
 
-        # Validate that date is not in the future
-        if transaction_date > timezone.now():
-            return Response({'error': 'Transaction date cannot be in the future'}, status=400)
-
-        if not portfolio.cash_account.has_sufficient_balance(amount):
-            return Response({'error': 'Insufficient cash balance'}, status=400)
-
-        # Create cash transaction (negative amount for withdrawal)
-        cash_transaction = CashTransaction.objects.create(
-            cash_account=portfolio.cash_account,
-            user=request.user,
-            transaction_type='WITHDRAWAL',
-            amount=-amount,
-            description=description,
-            transaction_date=transaction_date  # Use the provided date
+        # Get or create cash account
+        from .models import CashAccount
+        cash_account, created = CashAccount.objects.get_or_create(
+            portfolio=portfolio,
+            defaults={'balance': Decimal('0')}
         )
 
-        # Update balance
-        portfolio.cash_account.update_balance(-amount)
+        if cash_account.balance < amount:
+            return Response({'error': 'Insufficient balance'}, status=400)
 
-        return Response(CashTransactionSerializer(cash_transaction).data)
+        # Use portfolio's base currency
+        transaction_currency = portfolio.base_currency
+
+        transaction = CashTransaction.objects.create(
+            portfolio=portfolio,
+            transaction_type='WITHDRAWAL',
+            amount=-amount,  # Negative for withdrawal
+            currency=transaction_currency,  # Use portfolio's base currency
+            description=request.data.get('description', 'Cash withdrawal'),
+            transaction_date=request.data.get('transaction_date', timezone.now().date()),
+            balance_after=cash_account.balance - amount
+        )
+
+        # Update cash account balance
+        cash_account.balance -= amount
+        cash_account.save()
+
+        serializer = CashTransactionSerializer(transaction)
+        return Response(serializer.data, status=201)
 
     @action(detail=True, methods=['get'])
     def cash_history(self, request, pk=None):
