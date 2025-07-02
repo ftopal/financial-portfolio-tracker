@@ -289,18 +289,40 @@ class CashTransactionSerializer(serializers.ModelSerializer):
         read_only_fields = ['user', 'balance_after', 'created_at', 'updated_at']
 
     def create(self, validated_data):
-        # Auto-set user from request
-        validated_data['user'] = self.context['request'].user
+        # Get currency from validated data or use security's currency
+        currency = validated_data.get('currency')
+        if not currency and 'security' in validated_data:
+            currency = validated_data['security'].currency
+            validated_data['currency'] = currency
 
-        # Update cash account balance
-        cash_account = validated_data['cash_account']
-        amount = validated_data['amount']
+        # Calculate exchange rate if currency differs from portfolio currency
+        portfolio = validated_data['portfolio']
+        portfolio_currency = portfolio.base_currency or portfolio.currency  # Use base_currency first
 
-        # Update balance
-        cash_account.update_balance(amount)
+        if currency and currency != portfolio_currency:
+            from .services.currency_service import CurrencyService
+            exchange_rate = CurrencyService.get_exchange_rate(
+                currency,
+                portfolio_currency,
+                validated_data.get('transaction_date', timezone.now()).date()
+            )
+            if exchange_rate:
+                validated_data['exchange_rate'] = exchange_rate
 
-        # Set balance_after
-        validated_data['balance_after'] = cash_account.balance
+                # Calculate base amount INCLUDING FEES
+                quantity = validated_data.get('quantity', 0)
+                price = validated_data.get('price', 0)
+                fees = validated_data.get('fees', 0)
+                transaction_type = validated_data.get('transaction_type')
+
+                if transaction_type == 'BUY':
+                    total_amount = (quantity * price) + fees
+                elif transaction_type == 'SELL':
+                    total_amount = (quantity * price) - fees
+                else:
+                    total_amount = quantity * price
+
+                validated_data['base_amount'] = total_amount * exchange_rate
 
         return super().create(validated_data)
 

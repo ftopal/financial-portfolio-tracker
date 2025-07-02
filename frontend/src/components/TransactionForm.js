@@ -24,7 +24,7 @@ import InfoIcon from '@mui/icons-material/Info';
 import { Search as SearchIcon, TrendingUp } from '@mui/icons-material';
 import CurrencySelector from './CurrencySelector';
 import CurrencyDisplay from './CurrencyDisplay';
-import api from '../services/api';
+import api, { currencyAPI } from '../services/api';
 import debounce from 'lodash.debounce';
 
 const TransactionForm = ({
@@ -35,7 +35,7 @@ const TransactionForm = ({
   security = null,
   transaction = null,
   existingHoldings = null,
-  portfolio = null  // Add portfolio prop to receive portfolio data including base_currency
+  portfolio = null
 }) => {
   const [formData, setFormData] = useState({
     transaction_type: 'BUY',
@@ -44,7 +44,8 @@ const TransactionForm = ({
     currency: 'USD',
     transaction_date: new Date().toISOString().split('T')[0],
     fees: '0',
-    notes: ''
+    notes: '',
+    split_ratio: ''
   });
 
   const [selectedSecurity, setSelectedSecurity] = useState(null);
@@ -53,6 +54,7 @@ const TransactionForm = ({
   const [error, setError] = useState('');
   const [exchangeRate, setExchangeRate] = useState(null);
   const [convertedAmount, setConvertedAmount] = useState(null);
+  const [convertedAmountWithFees, setConvertedAmountWithFees] = useState(null);
 
   // Security search states
   const [searchOpen, setSearchOpen] = useState(false);
@@ -79,84 +81,147 @@ const TransactionForm = ({
     try {
       const response = await api.portfolios.getHoldings(portfolioId);
       const holdings = {};
-      if (response.data) {
-        // Create a map of symbol to quantity for easy lookup
-        Object.values(response.data).forEach(holding => {
-          holdings[holding.security.symbol] = holding.quantity;
-        });
-      }
+      response.data.forEach(holding => {
+        holdings[holding.security.symbol] = holding.quantity;
+      });
       setPortfolioHoldings(holdings);
     } catch (err) {
       console.error('Failed to fetch holdings:', err);
     }
   }, [portfolioId]);
 
+  // Initialize form
   useEffect(() => {
     if (open) {
-      // Use provided portfolio or fetch it
-      if (portfolio) {
-        setPortfolioData(portfolio);
-        setFormData(prev => ({
-          ...prev,
-          currency: portfolio.base_currency || 'USD'
-        }));
-      } else {
-        fetchPortfolio();
-      }
-
-      // Only fetch holdings if not provided via props
-      if (!existingHoldings) {
-        fetchPortfolioHoldings();
-      } else {
-        setPortfolioHoldings(existingHoldings);
-      }
+      fetchPortfolio();
+      fetchPortfolioHoldings();
 
       if (security) {
-        // Get the quantity for this security
-        const securityQuantity = existingHoldings
-          ? (existingHoldings[security.symbol] || security.total_quantity || 0)
-          : (security.total_quantity || 0);
-
         setSelectedSecurity(security);
+        // Auto-set currency to security's currency when a security is pre-selected
         setFormData(prev => ({
           ...prev,
-          price: security.current_price?.toString() || '',
-          currency: portfolioData?.base_currency || portfolio?.base_currency || security.currency || 'USD',
-          // Auto-fill quantity for dividends
-          quantity: prev.transaction_type === 'DIVIDEND' && securityQuantity > 0
-            ? securityQuantity.toString()
-            : prev.quantity
+          currency: security.currency || prev.currency
         }));
       }
+
       if (transaction) {
-        // Load transaction data for editing
+        // Editing existing transaction
         setFormData({
           transaction_type: transaction.transaction_type,
           quantity: transaction.quantity.toString(),
           price: transaction.price.toString(),
-          currency: transaction.currency || transaction.security.currency,
+          currency: transaction.currency || 'USD',
           transaction_date: transaction.transaction_date.split('T')[0],
           fees: transaction.fees?.toString() || '0',
-          notes: transaction.notes || ''
+          notes: transaction.notes || '',
+          split_ratio: transaction.split_ratio || ''
         });
         setSelectedSecurity(transaction.security);
       }
     }
-  }, [open, security, transaction, existingHoldings, portfolio, portfolioData, fetchPortfolio, fetchPortfolioHoldings]);
+  }, [open, security, transaction, fetchPortfolio, fetchPortfolioHoldings]);
 
-  // Also update the form data when transaction type changes to DIVIDEND
+  // Auto-set currency when security is selected
   useEffect(() => {
-    if (formData.transaction_type === 'DIVIDEND' && selectedSecurity) {
-      const holdingQuantity = portfolioHoldings[selectedSecurity.symbol] || selectedSecurity.total_quantity || 0;
-      if (holdingQuantity > 0 && !formData.quantity) {
-        setFormData(prev => ({
-          ...prev,
-          quantity: holdingQuantity.toString()
-        }));
-      }
+    if (selectedSecurity && selectedSecurity.currency) {
+      setFormData(prev => ({
+        ...prev,
+        currency: selectedSecurity.currency
+      }));
     }
-  }, [formData.transaction_type, formData.quantity, selectedSecurity, portfolioHoldings]);
+  }, [selectedSecurity]);
 
+  // Calculate exchange rate when currency or amount changes
+  const fetchExchangeRate = useCallback(async () => {
+    try {
+      const currentPortfolio = portfolioData || portfolio;
+      const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
+      if (formData.currency === portfolioCurrency) {
+        setExchangeRate(1);
+        setConvertedAmount(null);
+        setConvertedAmountWithFees(null);
+        return;
+      }
+
+      // Calculate amount based on transaction type
+      const amount = formData.transaction_type === 'DIVIDEND'
+        ? parseFloat(formData.price || 0)
+        : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);
+
+      const fees = parseFloat(formData.fees || 0);
+
+      // Don't proceed if amount is 0
+      if (!amount || amount === 0) {
+        setExchangeRate(null);
+        setConvertedAmount(null);
+        setConvertedAmountWithFees(null);
+        return;
+      }
+
+      // Convert the base amount
+      const response = await currencyAPI.convert({
+        amount: amount,
+        from_currency: formData.currency,
+        to_currency: portfolioCurrency,
+        date: formData.transaction_date
+      });
+
+      const rate = response.data.converted_amount / amount;
+      setExchangeRate(rate);
+      setConvertedAmount(response.data.converted_amount);
+
+      // Calculate total with fees
+      let totalInTransactionCurrency;
+      if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
+        totalInTransactionCurrency = amount + fees;
+      } else if (formData.transaction_type === 'SELL') {
+        totalInTransactionCurrency = amount - fees;
+      } else {
+        totalInTransactionCurrency = amount;
+      }
+
+      // Convert total with fees
+      if (fees > 0) {
+        const totalResponse = await currencyAPI.convert({
+          amount: totalInTransactionCurrency,
+          from_currency: formData.currency,
+          to_currency: portfolioCurrency,
+          date: formData.transaction_date
+        });
+        setConvertedAmountWithFees(totalResponse.data.converted_amount);
+      } else {
+        setConvertedAmountWithFees(response.data.converted_amount);
+      }
+
+    } catch (err) {
+      console.error('Failed to fetch exchange rate:', err);
+      setExchangeRate(null);
+      setConvertedAmount(null);
+      setConvertedAmountWithFees(null);
+    }
+  }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, formData.transaction_type, formData.fees, portfolioData, portfolio]);
+
+  // Trigger exchange rate calculation
+  useEffect(() => {
+    const currentPortfolio = portfolioData || portfolio;
+    const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
+    if (currentPortfolio && formData.currency !== portfolioCurrency && formData.price && formData.quantity) {
+      fetchExchangeRate();
+    } else if (formData.currency === portfolioCurrency) {
+      setExchangeRate(1);
+      setConvertedAmount(null);
+      setConvertedAmountWithFees(null);
+    } else {
+      setExchangeRate(null);
+      setConvertedAmount(null);
+      setConvertedAmountWithFees(null);
+    }
+  }, [formData.currency, formData.price, formData.quantity, formData.fees, portfolioData, portfolio, fetchExchangeRate]);
+
+  // Security search functionality
   const searchSecurities = React.useMemo(
     () =>
       debounce(async (query) => {
@@ -198,10 +263,11 @@ const TransactionForm = ({
         const imported = response.data.security;
         setSelectedSecurity(imported);
         setSearchOptions([imported]);
+        // Set currency to the imported security's currency
         setFormData(prev => ({
           ...prev,
           price: imported.current_price?.toString() || '',
-          currency: portfolioData?.base_currency || portfolio?.base_currency || imported.currency || 'USD'
+          currency: imported.currency || 'USD'
         }));
         setSearchOpen(false);
         setError('');
@@ -212,85 +278,6 @@ const TransactionForm = ({
       setSearchLoading(false);
     }
   };
-
-  const fetchExchangeRate = useCallback(async () => {
-    try {
-      // Calculate amount based on transaction type
-      const amount = formData.transaction_type === 'DIVIDEND'
-        ? parseFloat(formData.price || 0)  // For dividends, use the total amount directly
-        : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);  // For buy/sell, multiply
-
-      // Don't proceed if amount is 0 or invalid
-      if (!amount || amount === 0) {
-        setExchangeRate(null);
-        setConvertedAmount(null);
-        return;
-      }
-
-      const currentPortfolio = portfolioData || portfolio;
-      const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
-
-      const response = await api.currencies.convert({
-        amount: amount,
-        from_currency: formData.currency,
-        to_currency: portfolioCurrency,
-        date: formData.transaction_date
-      });
-
-      setExchangeRate(response.data.converted_amount / amount);
-      setConvertedAmount(response.data.converted_amount);
-    } catch (err) {
-      console.error('Failed to fetch exchange rate:', err);
-      setExchangeRate(null);
-      setConvertedAmount(null);
-    }
-  }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, formData.transaction_type, portfolioData, portfolio]);
-
-  // Calculate exchange rate when currency changes
-  useEffect(() => {
-    const currentPortfolio = portfolioData || portfolio;
-    const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
-
-    if (currentPortfolio && formData.currency !== portfolioCurrency && formData.price && formData.quantity) {
-      fetchExchangeRate();
-    } else {
-      setExchangeRate(null);
-      setConvertedAmount(null);
-    }
-  }, [formData.currency, formData.price, formData.quantity, portfolioData, portfolio, fetchExchangeRate]);
-
-  // Auto-calculate additional shares when split ratio changes
-  useEffect(() => {
-    if (formData.transaction_type === 'SPLIT' && formData.split_ratio && selectedSecurity) {
-      try {
-        // Parse the split ratio (e.g., "2:1" means 2 new shares for every 1 old share)
-        const [newShares, oldShares] = formData.split_ratio.split(':').map(Number);
-
-        if (!isNaN(newShares) && !isNaN(oldShares) && oldShares > 0) {
-          // Get current holdings for this security
-          const currentHolding = portfolioHoldings[selectedSecurity.symbol] || 0;
-
-          if (currentHolding > 0) {
-            // Calculate total shares after split
-            const totalSharesAfterSplit = (currentHolding * newShares) / oldShares;
-            // Additional shares = total after split - current holdings
-            const additionalShares = totalSharesAfterSplit - currentHolding;
-
-            // Only update if the calculated value is different from current value
-            // This prevents overwriting manual edits unless the ratio changes
-            if (additionalShares >= 0 && additionalShares !== parseFloat(formData.quantity)) {
-              setFormData(prev => ({
-                ...prev,
-                quantity: additionalShares.toFixed(8) // Use 8 decimal places for precision
-              }));
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error calculating split shares:', error);
-      }
-    }
-  }, [formData.split_ratio, formData.transaction_type, selectedSecurity, portfolioHoldings]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -317,7 +304,6 @@ const TransactionForm = ({
 
       onSuccess();
       onClose();
-      // Remove resetForm() call since the form is closing anyway
     } catch (err) {
       console.error('Transaction error:', err);
       setError(err.response?.data?.detail || 'Failed to save transaction');
@@ -326,21 +312,21 @@ const TransactionForm = ({
     }
   };
 
+  // Calculate totals
   const totalAmount = formData.transaction_type === 'DIVIDEND'
-    ? parseFloat(formData.price || 0)  // For dividends, price IS the total amount
+    ? parseFloat(formData.price || 0)
     : formData.transaction_type === 'SPLIT'
-    ? 0  // Splits have no monetary value
-    : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);  // For buy/sell, multiply
+    ? 0
+    : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);
 
   const totalWithFees = formData.transaction_type === 'DIVIDEND'
-    ? totalAmount + parseFloat(formData.fees || 0)  // Dividends: add fees to total dividend
+    ? totalAmount + parseFloat(formData.fees || 0)
     : formData.transaction_type === 'SPLIT'
-    ? 0  // Splits have no fees or monetary value
+    ? 0
     : formData.transaction_type === 'BUY'
-      ? totalAmount + parseFloat(formData.fees || 0)  // Buy: add fees
-      : totalAmount - parseFloat(formData.fees || 0); // Sell: subtract fees
+      ? totalAmount + parseFloat(formData.fees || 0)
+      : totalAmount - parseFloat(formData.fees || 0);
 
-  // Get the current portfolio currency
   const currentPortfolio = portfolioData || portfolio;
   const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
 
@@ -352,12 +338,12 @@ const TransactionForm = ({
             <Typography variant="h6">
               {transaction ? 'Edit Transaction' : 'New Transaction'}
             </Typography>
-            {currentPortfolio && (
+            {portfolioCurrency && (
               <Chip
                 label={`Portfolio: ${portfolioCurrency}`}
-                size="small"
                 color="primary"
                 variant="outlined"
+                size="small"
               />
             )}
           </Box>
@@ -365,30 +351,29 @@ const TransactionForm = ({
 
         <DialogContent>
           {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
               {error}
             </Alert>
           )}
 
-          {/* Security Selection with Yahoo Import */}
-          {!security && (
-            <Box sx={{ mb: 3, mt: 2 }}>
+          {/* Security Selection */}
+          {!security && !transaction && (
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Search Security
+              </Typography>
               <Autocomplete
+                open={searchOpen}
+                onOpen={() => setSearchOpen(true)}
+                onClose={() => setSearchOpen(false)}
                 value={selectedSecurity}
                 onChange={(event, newValue) => {
                   setSelectedSecurity(newValue);
                   if (newValue) {
-                    // Check if we have holdings for this security
-                    const holdingQuantity = portfolioHoldings[newValue.symbol] || 0;
-
                     setFormData(prev => ({
                       ...prev,
                       price: newValue.current_price?.toString() || '',
-                      currency: portfolioCurrency || newValue.currency || 'USD',
-                      // Auto-fill quantity for dividends
-                      quantity: prev.transaction_type === 'DIVIDEND' && holdingQuantity > 0
-                        ? holdingQuantity.toString()
-                        : prev.quantity
+                      currency: newValue.currency || 'USD' // Auto-set currency
                     }));
                   }
                 }}
@@ -397,82 +382,59 @@ const TransactionForm = ({
                   setSearchInput(newInputValue);
                 }}
                 options={searchOptions}
-                getOptionLabel={(option) =>
-                  option ? `${option.symbol} - ${option.name}` : ''
-                }
-                loading={searchLoading}
-                open={searchOpen}
-                onOpen={() => setSearchOpen(true)}
-                onClose={() => setSearchOpen(false)}
-                isOptionEqualToValue={(option, value) => option.id === value.id}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Search Security"
-                    placeholder="Enter symbol or name..."
-                    fullWidth
-                    required={!selectedSecurity}
-                    InputProps={{
-                      ...params.InputProps,
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <SearchIcon />
-                        </InputAdornment>
-                      ),
-                      endAdornment: (
-                        <React.Fragment>
-                          {searchLoading ? <CircularProgress color="inherit" size={20} /> : null}
-                          {params.InputProps.endAdornment}
-                        </React.Fragment>
-                      ),
-                    }}
-                  />
-                )}
+                getOptionLabel={(option) => `${option.symbol} - ${option.name}`}
                 renderOption={(props, option) => (
                   <Box component="li" {...props}>
-                    <Box sx={{ width: '100%' }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="body1">
-                          <strong>{option.symbol}</strong> - {option.name}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          <CurrencyDisplay
-                            amount={option.current_price}
-                            currency={option.currency}
-                            showCode={true}
-                          />
-                        </Typography>
-                      </Box>
+                    <Box>
+                      <Typography variant="body1">
+                        {option.symbol} - {option.name}
+                      </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {option.exchange} • {option.security_type} • {option.currency}
+                        {option.exchange} | {option.currency} | Current: {option.current_price}
                       </Typography>
                     </Box>
                   </Box>
                 )}
+                loading={searchLoading}
+                fullWidth
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    placeholder="Search by symbol or name..."
+                    InputProps={{
+                      ...params.InputProps,
+                      startAdornment: <SearchIcon color="action" sx={{ mr: 1 }} />,
+                      endAdornment: (
+                        <>
+                          {searchLoading ? <CircularProgress color="inherit" size={20} /> : null}
+                          {params.InputProps.endAdornment}
+                        </>
+                      ),
+                    }}
+                  />
+                )}
                 noOptionsText={
-                  <Box sx={{ p: 2 }}>
-                    {searchInput.length >= 2 ? (
-                      <>
-                        <Typography variant="body2" gutterBottom>
-                          No results found for "{searchInput}"
-                        </Typography>
-                        <Button
-                          variant="contained"
-                          startIcon={<TrendingUp />}
-                          onClick={handleImportFromYahoo}
-                          disabled={searchLoading}
-                          fullWidth
-                          sx={{ mt: 1 }}
-                        >
-                          Import {searchInput.toUpperCase()} from Yahoo Finance
-                        </Button>
-                      </>
-                    ) : (
-                      <Typography variant="body2" color="text.secondary">
-                        Type at least 2 characters to search
+                  searchInput.length >= 2 ? (
+                    <Box sx={{ p: 2 }}>
+                      <Typography variant="body2" gutterBottom>
+                        No results found for "{searchInput}"
                       </Typography>
-                    )}
-                  </Box>
+                      <Button
+                        variant="contained"
+                        startIcon={<TrendingUp />}
+                        onClick={handleImportFromYahoo}
+                        disabled={searchLoading}
+                        fullWidth
+                        sx={{ mt: 1 }}
+                      >
+                        Import {searchInput.toUpperCase()} from Yahoo Finance
+                      </Button>
+                    </Box>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      Type at least 2 characters to search
+                    </Typography>
+                  )
                 }
                 PaperComponent={(props) => (
                   <Paper {...props} elevation={8} />
@@ -508,11 +470,6 @@ const TransactionForm = ({
                   setFormData(prev => ({
                     ...prev,
                     transaction_type: newType,
-                    // Auto-fill quantity when switching to DIVIDEND
-                    quantity: newType === 'DIVIDEND' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
-                      ? portfolioHoldings[selectedSecurity.symbol].toString()
-                      : prev.quantity,
-                    // Clear price for splits as they don't have monetary value
                     price: newType === 'SPLIT' ? '0' : prev.price,
                     fees: newType === 'SPLIT' ? '0' : prev.fees
                   }));
@@ -535,103 +492,36 @@ const TransactionForm = ({
               fullWidth
               required
             />
+          </Box>
 
-            {formData.transaction_type === 'SPLIT' && (
-              <>
-                <TextField
-                  type="text"
-                  label="Split Ratio (e.g., 2:1)"
-                  value={formData.split_ratio || ''}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    // Allow only numbers, colons, and spaces
-                    if (/^[\d\s:]*$/.test(value)) {
-                      setFormData({ ...formData, split_ratio: value.replace(/\s/g, '') });
-                    }
-                  }}
-                  fullWidth
-                  required
-                  helperText={
-                    selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
-                      ? `Format: new:old (e.g., 2:1). You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares.`
-                      : "Format: new:old (e.g., 2:1 means each share becomes 2 shares)"
-                  }
-                  placeholder="2:1"
-                  error={formData.split_ratio && !/^\d+:\d+$/.test(formData.split_ratio)}
-                />
-
-                {/* Show calculation preview */}
-                {formData.split_ratio && /^\d+:\d+$/.test(formData.split_ratio) &&
-                 selectedSecurity && portfolioHoldings[selectedSecurity.symbol] > 0 && (
-                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                    Split calculation: {portfolioHoldings[selectedSecurity.symbol]} shares × {formData.split_ratio} = {
-                      (() => {
-                        const [newShares, oldShares] = formData.split_ratio.split(':').map(Number);
-                        const total = (portfolioHoldings[selectedSecurity.symbol] * newShares) / oldShares;
-                        return `${total} total shares (${total - portfolioHoldings[selectedSecurity.symbol]} new shares)`;
-                      })()
-                    }
-                  </Typography>
-                )}
-              </>
-            )}
-
+          {/* Quantity and Price */}
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 2 }}>
             <TextField
               type="number"
-              label={
-                formData.transaction_type === 'DIVIDEND' ? 'Number of Shares' :
-                formData.transaction_type === 'SPLIT' ? 'Additional Shares Received' :
-                'Quantity'
-              }
+              label="Quantity"
               value={formData.quantity}
               onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
               inputProps={{ step: "0.00000001", min: "0" }}
               fullWidth
               required
-              helperText={
-                formData.transaction_type === 'DIVIDEND' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
-                  ? `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares`
-                  : formData.transaction_type === 'SPLIT' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
-                  ? formData.split_ratio && /^\d+:\d+$/.test(formData.split_ratio)
-                    ? '✓ Auto-calculated from split ratio. You can edit if needed.'
-                    : `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares. Enter split ratio above to auto-calculate.`
-                  : ''
-              }
-              // Add visual indicator that it's auto-calculated
-              InputProps={formData.transaction_type === 'SPLIT' && formData.split_ratio ? {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Tooltip title="Auto-calculated from split ratio. You can still edit this value.">
-                      <InfoIcon color="action" fontSize="small" />
-                    </Tooltip>
-                  </InputAdornment>
-                ),
-              } : undefined}
             />
 
             {formData.transaction_type !== 'SPLIT' && (
               <TextField
                 type="number"
-                label={`${formData.transaction_type === 'DIVIDEND' ? 'Total Dividend Amount' : 'Price per Unit'} (${portfolioCurrency})`}
+                label={`Price per Unit (${formData.currency})`}
                 value={formData.price}
                 onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                 inputProps={{ step: "0.00000001", min: "0" }}
                 fullWidth
                 required
-                helperText={
-                  formData.transaction_type === 'DIVIDEND'
-                    ? formData.quantity && formData.price
-                      ? <span>Dividend per share: <CurrencyDisplay
-                          amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
-                          currency={formData.currency}
-                          showCode={false}
-                        /></span>
-                      : 'Enter the total dividend amount received'
-                    : `Enter price in ${formData.currency}`
-                }
+                helperText={`Enter price in ${formData.currency}`}
               />
             )}
+          </Box>
 
+          {/* Currency and Fees */}
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 2 }}>
             <CurrencySelector
               value={formData.currency}
               onChange={(value) => setFormData({ ...formData, currency: value })}
@@ -672,45 +562,7 @@ const TransactionForm = ({
               Transaction Summary
             </Typography>
 
-            {formData.transaction_type === 'SPLIT' ? (
-              <>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2">Split Ratio:</Typography>
-                  <Typography variant="body2" fontWeight="bold">
-                    {formData.split_ratio || 'Not specified'}
-                  </Typography>
-                </Box>
-
-                {selectedSecurity && portfolioHoldings[selectedSecurity.symbol] > 0 && (
-                  <>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                      <Typography variant="body2">Current Shares:</Typography>
-                      <Typography variant="body2">
-                        {portfolioHoldings[selectedSecurity.symbol]}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                      <Typography variant="body2">Additional Shares:</Typography>
-                      <Typography variant="body2" fontWeight="bold">
-                        +{formData.quantity || 0}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
-                      <Typography variant="body2" fontWeight="bold">Total After Split:</Typography>
-                      <Typography variant="body2" fontWeight="bold" color="primary">
-                        {parseFloat(portfolioHoldings[selectedSecurity.symbol] || 0) + parseFloat(formData.quantity || 0)}
-                      </Typography>
-                    </Box>
-                  </>
-                )}
-
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  No cash impact for stock splits
-                </Typography>
-              </>
-            ) : (
+            {formData.transaction_type !== 'SPLIT' && (
               <>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography variant="body2">Subtotal:</Typography>
@@ -720,17 +572,6 @@ const TransactionForm = ({
                     showCode={true}
                   />
                 </Box>
-
-                {formData.transaction_type === 'DIVIDEND' && formData.quantity && formData.price && (
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="body2">Dividend per share:</Typography>
-                    <CurrencyDisplay
-                      amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
-                      currency={formData.currency}
-                      showCode={true}
-                    />
-                  </Box>
-                )}
 
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography variant="body2">Fees:</Typography>
@@ -752,7 +593,7 @@ const TransactionForm = ({
                   </Typography>
                 </Box>
 
-                {currentPortfolio && formData.currency !== portfolioCurrency && convertedAmount && (
+                {currentPortfolio && formData.currency !== portfolioCurrency && convertedAmountWithFees && (
                   <>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2, pt: 2, borderTop: 1, borderColor: 'divider' }}>
                       <Typography variant="body2" color="text.secondary">
@@ -760,7 +601,7 @@ const TransactionForm = ({
                       </Typography>
                       <Typography variant="body2" color="text.secondary" fontWeight="bold">
                         <CurrencyDisplay
-                          amount={convertedAmount}
+                          amount={convertedAmountWithFees}
                           currency={portfolioCurrency}
                           showCode={true}
                         />

@@ -125,11 +125,11 @@ const ConsolidatedPortfolioDetails = () => {
     fetchConsolidatedData();
   };
 
-  const formatCurrency = (amount, currency = null) => {
-    const currencyCode = currency || portfolio?.base_currency || 'USD';
+  const formatCurrency = (amount, currencyCode = null) => {
+    const code = currencyCode || portfolio?.base_currency || 'USD';
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
-      currency: currencyCode
+      currency: code
     }).format(amount || 0);
   };
 
@@ -494,8 +494,8 @@ const ConsolidatedPortfolioDetails = () => {
                                   <TableCell>Date</TableCell>
                                   <TableCell>Type</TableCell>
                                   <TableCell align="right">Quantity</TableCell>
-                                  <TableCell align="right">Price ({portfolio?.base_currency || 'USD'})</TableCell>
-                                  <TableCell align="right">Total ({portfolio?.base_currency || 'USD'})</TableCell>
+                                  <TableCell align="right">Price</TableCell>
+                                  <TableCell align="right">Total</TableCell>
                                   <TableCell align="right">Gain/Loss</TableCell>
                                   <TableCell align="center">Action</TableCell>
                                 </TableRow>
@@ -512,12 +512,31 @@ const ConsolidatedPortfolioDetails = () => {
                                       />
                                     </TableCell>
                                     <TableCell align="right">{transaction.quantity}</TableCell>
-                                    <TableCell align="right">{formatCurrency(transaction.price)}</TableCell>
-                                    <TableCell align="right">{formatCurrency(transaction.value)}</TableCell>
+                                    <TableCell align="right">
+                                      {/* Show price in original transaction currency */}
+                                      {formatCurrency(transaction.price, transaction.currency || portfolio?.base_currency)}
+                                    </TableCell>
+                                    <TableCell align="right">
+                                      {/* Show total in original transaction currency */}
+                                      {formatCurrency(
+                                        transaction.transaction_type === 'BUY'
+                                          ? (transaction.quantity * transaction.price) + (transaction.fees || 0)
+                                          : transaction.transaction_type === 'SELL'
+                                          ? (transaction.quantity * transaction.price) - (transaction.fees || 0)
+                                          : transaction.value,
+                                        transaction.currency || portfolio?.base_currency
+                                      )}
+                                      {/* Show converted value if different currency */}
+                                      {transaction.currency && transaction.currency !== portfolio?.base_currency && (
+                                        <Typography variant="caption" display="block" color="text.secondary">
+                                          ({formatCurrency(transaction.value, portfolio?.base_currency)})
+                                        </Typography>
+                                      )}
+                                    </TableCell>
                                     <TableCell align="right">
                                       {transaction.transaction_type === 'DIVIDEND' ? (
                                         <Typography variant="body2" color="info.main">
-                                          +{formatCurrency(transaction.value)}
+                                          +{formatCurrency(transaction.value, portfolio?.base_currency)}
                                         </Typography>
                                       ) : transaction.transaction_type === 'SELL' ? (
                                         <Typography variant="body2" color="text.secondary">
@@ -529,7 +548,7 @@ const ConsolidatedPortfolioDetails = () => {
                                             variant="body2"
                                             color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
                                           >
-                                            {formatCurrency(transaction.gain_loss || 0)}
+                                            {formatCurrency(transaction.gain_loss || 0, portfolio?.base_currency)}
                                           </Typography>
                                           {transaction.gain_loss_percentage !== undefined && transaction.gain_loss_percentage !== null && (
                                             <Typography
@@ -543,14 +562,14 @@ const ConsolidatedPortfolioDetails = () => {
                                       )}
                                     </TableCell>
                                     <TableCell align="center">
-                                      <Tooltip title="Delete transaction">
+                                      <Tooltip title="Delete Transaction">
                                         <IconButton
                                           size="small"
-                                          color="error"
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             handleDeleteTransaction(transaction.id, asset.name);
                                           }}
+                                          color="error"
                                         >
                                           <DeleteIcon fontSize="small" />
                                         </IconButton>

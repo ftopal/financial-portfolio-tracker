@@ -389,7 +389,44 @@ class Transaction(models.Model):
 
     @property
     def total_value(self):
-        """Calculate total transaction value including fees"""
+        """Calculate total transaction value in PORTFOLIO BASE CURRENCY including fees"""
+        # First calculate the raw value in transaction currency
+        if self.transaction_type == 'BUY':
+            raw_value = (self.quantity * self.price) + self.fees
+        elif self.transaction_type == 'SELL':
+            raw_value = (self.quantity * self.price) - self.fees
+        elif self.transaction_type == 'DIVIDEND':
+            if self.dividend_per_share:
+                raw_value = self.quantity * self.dividend_per_share
+            elif self.price and self.quantity:
+                raw_value = self.price
+            else:
+                raw_value = Decimal('0')
+        elif self.transaction_type == 'SPLIT':
+            # Stock splits don't have monetary value
+            return Decimal('0')
+        elif self.transaction_type == 'FEE':
+            raw_value = -self.fees
+        elif self.transaction_type == 'INTEREST':
+            raw_value = self.quantity
+        else:
+            raw_value = Decimal('0')
+
+        # If we have a base_amount (converted value), use that
+        # Otherwise, convert using exchange rate or return raw value
+        if self.base_amount:
+            # For BUY transactions, we need to add fees in base currency
+            if self.transaction_type == 'BUY' and self.fees and self.exchange_rate:
+                return self.base_amount + (self.fees * self.exchange_rate)
+            return self.base_amount
+        elif self.exchange_rate and self.exchange_rate != Decimal('1'):
+            return raw_value * self.exchange_rate
+        else:
+            return raw_value
+
+    @property
+    def total_value_transaction_currency(self):
+        """Get total value in transaction currency (not converted)"""
         if self.transaction_type == 'BUY':
             return (self.quantity * self.price) + self.fees
         elif self.transaction_type == 'SELL':
@@ -401,7 +438,6 @@ class Transaction(models.Model):
                 return self.price
             return Decimal('0')
         elif self.transaction_type == 'SPLIT':
-            # Stock splits don't have monetary value
             return Decimal('0')
         elif self.transaction_type == 'FEE':
             return -self.fees
@@ -440,20 +476,38 @@ class Transaction(models.Model):
     def save(self, *args, **kwargs):
         # Calculate base amount if not provided
         if not self.base_amount and self.portfolio:
-            if self.currency == self.portfolio.currency:
-                self.base_amount = self.quantity * self.price
+            # Use base_currency, not currency
+            portfolio_currency = self.portfolio.base_currency or self.portfolio.currency
+
+            if self.currency == portfolio_currency:
+                # Calculate total including fees for the base amount
+                if self.transaction_type == 'BUY':
+                    self.base_amount = (self.quantity * self.price) + self.fees
+                elif self.transaction_type == 'SELL':
+                    self.base_amount = (self.quantity * self.price) - self.fees
+                else:
+                    self.base_amount = self.quantity * self.price
+
                 self.exchange_rate = Decimal('1')
             else:
                 # Get exchange rate
                 from .services.currency_service import CurrencyService
                 rate = CurrencyService.get_exchange_rate(
                     self.currency,
-                    self.portfolio.currency,
+                    portfolio_currency,
                     self.transaction_date.date() if hasattr(self.transaction_date, 'date') else self.transaction_date
                 )
                 if rate:
                     self.exchange_rate = rate
-                    self.base_amount = self.quantity * self.price * rate
+                    # Calculate total including fees for the base amount
+                    if self.transaction_type == 'BUY':
+                        total_in_transaction_currency = (self.quantity * self.price) + self.fees
+                    elif self.transaction_type == 'SELL':
+                        total_in_transaction_currency = (self.quantity * self.price) - self.fees
+                    else:
+                        total_in_transaction_currency = self.quantity * self.price
+
+                    self.base_amount = total_in_transaction_currency * rate
 
         super().save(*args, **kwargs)
 

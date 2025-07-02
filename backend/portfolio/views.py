@@ -810,15 +810,24 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 'price': float(transaction.price),
                 'current_price': float(data['security'].current_price),
                 'fees': float(transaction.fees),
+                # ADD CURRENCY INFORMATION
+                'currency': transaction.currency,
+                'exchange_rate': float(transaction.exchange_rate) if transaction.exchange_rate else 1,
+                'base_amount': float(transaction.base_amount) if transaction.base_amount else None,
             }
 
             # Add specific fields based on transaction type
             if transaction.transaction_type == 'BUY':
+                # Calculate value in portfolio base currency using base_amount if available
+                value_in_base_currency = transaction.base_amount if transaction.base_amount else (
+                            transaction.quantity * data['security'].current_price)
+
                 transaction_data.update({
                     'purchase_date': transaction.transaction_date,  # For compatibility
                     'purchase_price': float(transaction.price),  # For compatibility
-                    'value': float(transaction.quantity * data['security'].current_price),
-                    'cost': float(transaction.quantity * transaction.price),
+                    'value': float(value_in_base_currency),  # Value in portfolio base currency
+                    'cost': float(transaction.base_amount) if transaction.base_amount else float(
+                        transaction.quantity * transaction.price),
                     'gain_loss': float((data['security'].current_price - transaction.price) * transaction.quantity),
                     'gain_loss_percentage': float(
                         ((data['security'].current_price - transaction.price) / transaction.price * 100)
@@ -826,20 +835,25 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                     )
                 })
             elif transaction.transaction_type == 'SELL':
+                value_in_base_currency = transaction.base_amount if transaction.base_amount else (
+                            transaction.quantity * transaction.price)
+
                 transaction_data.update({
                     'purchase_date': transaction.transaction_date,  # For compatibility
                     'purchase_price': float(transaction.price),  # For compatibility
-                    'value': float(transaction.quantity * transaction.price),
-                    'proceeds': float(transaction.quantity * transaction.price - transaction.fees)
+                    'value': float(value_in_base_currency),
+                    'proceeds': float(value_in_base_currency)
                 })
             elif transaction.transaction_type == 'DIVIDEND':
+                value_in_base_currency = transaction.base_amount if transaction.base_amount else transaction.total_value
+
                 transaction_data.update({
                     'purchase_date': transaction.transaction_date,  # For compatibility
                     'dividend_per_share': float(
                         transaction.dividend_per_share) if transaction.dividend_per_share else 0,
-                    'total_dividend': float(transaction.total_value),
+                    'total_dividend': float(value_in_base_currency),
                     'purchase_price': 0,  # No purchase price for dividends
-                    'value': float(transaction.total_value),
+                    'value': float(value_in_base_currency),
                     'gain_loss': 0,
                     'gain_loss_percentage': 0
                 })
@@ -862,7 +876,8 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 'total_gain_loss': float(data['unrealized_gains']),
                 'total_dividends': float(data['total_dividends']),
                 'gain_loss_percentage': float(
-                    (data['unrealized_gains'] / (data.get('net_cash_invested', data['quantity'] * data['avg_cost'])) * 100)
+                    (data['unrealized_gains'] / (
+                        data.get('net_cash_invested', data['quantity'] * data['avg_cost'])) * 100)
                     if data.get('net_cash_invested', data['quantity'] * data['avg_cost']) > 0 else 0
                 ),
                 'transactions': sorted(transactions, key=lambda x: x['transaction_date'], reverse=True)
