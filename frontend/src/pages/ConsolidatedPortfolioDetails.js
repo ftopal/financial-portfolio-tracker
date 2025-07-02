@@ -534,31 +534,43 @@ const ConsolidatedPortfolioDetails = () => {
                                       )}
                                     </TableCell>
                                     <TableCell align="right">
-                                      {transaction.transaction_type === 'DIVIDEND' ? (
-                                        <Typography variant="body2" color="info.main">
-                                          +{formatCurrency(transaction.value, portfolio?.base_currency)}
-                                        </Typography>
-                                      ) : transaction.transaction_type === 'SELL' ? (
-                                        <Typography variant="body2" color="text.secondary">
-                                          Sold
-                                        </Typography>
-                                      ) : (
+                                      {transaction.transaction_type === 'BUY' && (
                                         <Box>
+                                          {/* Show gain/loss in transaction currency */}
                                           <Typography
                                             variant="body2"
                                             color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
                                           >
-                                            {formatCurrency(transaction.gain_loss || 0, portfolio?.base_currency)}
+                                            {transaction.gain_loss >= 0 ? '+' : ''}{formatCurrency(Math.abs(transaction.gain_loss), transaction.currency || portfolio?.base_currency)}
                                           </Typography>
-                                          {transaction.gain_loss_percentage !== undefined && transaction.gain_loss_percentage !== null && (
-                                            <Typography
-                                              variant="caption"
-                                              color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
-                                            >
-                                              {formatPercentage(transaction.gain_loss_percentage)}
+                                          <Typography
+                                            variant="caption"
+                                            color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
+                                          >
+                                            {transaction.gain_loss >= 0 ? '+' : ''}{transaction.gain_loss_percentage.toFixed(2)}%
+                                          </Typography>
+                                          {/* Show converted gain/loss if different currency */}
+                                          {transaction.currency && transaction.currency !== portfolio?.base_currency && (
+                                            <Typography variant="caption" display="block" color="text.secondary">
+                                              ({transaction.gain_loss >= 0 ? '+' : ''}{formatCurrency(Math.abs(transaction.gain_loss_base_currency || (transaction.gain_loss * (transaction.exchange_rate || 1))), portfolio?.base_currency)})
                                             </Typography>
                                           )}
                                         </Box>
+                                      )}
+                                      {transaction.transaction_type === 'DIVIDEND' && (
+                                        <Typography variant="body2" color="info.main">
+                                          +{formatCurrency(transaction.value, portfolio?.base_currency)}
+                                        </Typography>
+                                      )}
+                                      {transaction.transaction_type === 'SELL' && (
+                                        <Typography variant="body2" color="text.secondary">
+                                          Sold
+                                        </Typography>
+                                      )}
+                                      {transaction.transaction_type === 'SPLIT' && (
+                                        <Typography variant="body2" color="text.secondary">
+                                          -
+                                        </Typography>
                                       )}
                                     </TableCell>
                                     <TableCell align="center">

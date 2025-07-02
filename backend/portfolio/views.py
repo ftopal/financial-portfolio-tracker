@@ -803,13 +803,27 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         for transaction in data['transactions']:
             # Calculate gain/loss for this specific transaction in its original currency
             if transaction.transaction_type == 'BUY':
-                current_price_in_tx_currency = data['security'].current_price
-                gain_loss_per_share = current_price_in_tx_currency - transaction.price
-                gain_loss_total = gain_loss_per_share * transaction.quantity
-                gain_loss_percentage = (gain_loss_per_share / transaction.price * 100) if transaction.price > 0 else 0
+                # Current value of the shares bought in this transaction
+                current_value = transaction.quantity * data['security'].current_price
+
+                # Total cost INCLUDING FEES in transaction currency
+                total_cost_with_fees = (transaction.quantity * transaction.price) + transaction.fees
+
+                # Gain/Loss in transaction currency
+                gain_loss_total = current_value - total_cost_with_fees
+
+                # Percentage based on total cost including fees
+                gain_loss_percentage = (gain_loss_total / total_cost_with_fees * 100) if total_cost_with_fees > 0 else 0
+
+                # Convert gain/loss to portfolio currency if needed
+                if transaction.currency != portfolio_currency and transaction.exchange_rate:
+                    gain_loss_base_currency = gain_loss_total * transaction.exchange_rate
+                else:
+                    gain_loss_base_currency = gain_loss_total
             else:
                 gain_loss_total = 0
                 gain_loss_percentage = 0
+                gain_loss_base_currency = 0
 
             transaction_data = {
                 'id': transaction.id,
@@ -828,6 +842,8 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 # Gain/loss in transaction currency
                 'gain_loss': float(gain_loss_total),
                 'gain_loss_percentage': float(gain_loss_percentage),
+                # Gain/loss in portfolio base currency for display
+                'gain_loss_base_currency': float(gain_loss_base_currency),
             }
 
             transactions.append(transaction_data)
@@ -835,7 +851,6 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         # Only include if there are transactions and positive quantity
         if transactions and data['quantity'] > 0:
             # Calculate average cost in portfolio base currency
-            # This should include fees
             total_cost_base_currency = Decimal('0')
             for tx in data['transactions']:
                 if tx.transaction_type == 'BUY':
@@ -898,6 +913,7 @@ def portfolio_holdings_consolidated(request, portfolio_id):
             }
             consolidated_assets.append(consolidated_asset)
 
+    # Rest remains the same...
     # Sort by total value descending
     consolidated_assets.sort(key=lambda x: x['total_current_value'], reverse=True)
 
@@ -932,4 +948,3 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         'cash_account': cash_info,
         'summary': summary
     })
-
