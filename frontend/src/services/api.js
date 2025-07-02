@@ -228,7 +228,8 @@ export const api = {
   transactions: transactionAPI,
   categories: categoryAPI,
   cash: cashAPI,
-  preferences: preferencesAPI
+  preferences: preferencesAPI,
+  currencies: currencyAPI
 };
 
 export default api;
