@@ -413,12 +413,9 @@ class Transaction(models.Model):
             raw_value = Decimal('0')
 
         # If we have a base_amount (converted value), use that
-        # Otherwise, convert using exchange rate or return raw value
+        # base_amount ALREADY includes fees from the save() method
         if self.base_amount:
-            # For BUY transactions, we need to add fees in base currency
-            if self.transaction_type == 'BUY' and self.fees and self.exchange_rate:
-                return self.base_amount + (self.fees * self.exchange_rate)
-            return self.base_amount
+            return self.base_amount  # Don't add fees again!
         elif self.exchange_rate and self.exchange_rate != Decimal('1'):
             return raw_value * self.exchange_rate
         else:
