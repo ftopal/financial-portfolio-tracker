@@ -432,7 +432,21 @@ const ConsolidatedPortfolioDetails = () => {
                       </TableCell>
                       <TableCell align="right">{asset.total_quantity.toLocaleString()}</TableCell>
                       <TableCell align="right">{formatCurrency(asset.avg_cost_price)}</TableCell>
-                      <TableCell align="right">{formatCurrency(asset.current_price)}</TableCell>
+                      <TableCell align="right">
+                        {/* Show converted price in portfolio currency */}
+                        <Typography variant="body2">
+                          {formatCurrency(
+                            asset.total_current_value / asset.total_quantity,
+                            portfolio?.base_currency
+                          )}
+                        </Typography>
+                        {/* Show original price in security currency below */}
+                        {asset.current_price_currency && asset.current_price_currency !== portfolio?.base_currency && (
+                          <Typography variant="caption" color="text.secondary">
+                            ({formatCurrency(asset.current_price, asset.current_price_currency || 'USD')})
+                          </Typography>
+                        )}
+                      </TableCell>
                       <TableCell align="right">
                         <Typography fontWeight="medium">
                           {formatCurrency(asset.total_current_value)}

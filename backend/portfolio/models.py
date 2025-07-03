@@ -46,11 +46,12 @@ class Portfolio(models.Model):
             )
 
     def get_holdings(self):
-        """Calculate current holdings based on transactions"""
+        """Calculate current holdings based on transactions - with currency conversion"""
         holdings = {}
+        portfolio_currency = self.base_currency or self.currency
 
         transactions = self.transactions.filter(
-            transaction_type__in=['BUY', 'SELL', 'DIVIDEND', 'SPLIT']  # Add SPLIT here
+            transaction_type__in=['BUY', 'SELL', 'DIVIDEND', 'SPLIT']
         ).select_related('security').order_by('transaction_date')
 
         for transaction in transactions:
@@ -65,17 +66,27 @@ class Portfolio(models.Model):
                     'total_dividends': Decimal('0'),
                     'realized_gains': Decimal('0'),
                     'transactions': [],
-                    'buy_lots': [],  # For FIFO calculation
-                    'net_cash_invested': Decimal('0'),  # Track net cash position
+                    'buy_lots': [],
+                    'net_cash_invested': Decimal('0'),
+                    'total_cost_base_currency': Decimal('0'),  # Track in portfolio currency
                 }
 
             holdings[security_id]['transactions'].append(transaction)
 
             if transaction.transaction_type == 'BUY':
                 holdings[security_id]['quantity'] += transaction.quantity
-                holdings[security_id]['total_cost'] += transaction.total_value
-                # Add to net cash invested (money out)
-                holdings[security_id]['net_cash_invested'] += transaction.total_value
+                holdings[security_id]['total_cost'] += transaction.quantity * transaction.price
+
+                # Track net cash invested in base currency
+                if transaction.base_amount:
+                    holdings[security_id]['net_cash_invested'] += transaction.base_amount
+                    # For cost basis, we need to track without fees
+                    cost_without_fees_base = (transaction.quantity * transaction.price) * (
+                                transaction.exchange_rate or Decimal('1'))
+                    holdings[security_id]['total_cost_base_currency'] += cost_without_fees_base
+                else:
+                    holdings[security_id]['net_cash_invested'] += transaction.total_value
+                    holdings[security_id]['total_cost_base_currency'] += transaction.quantity * transaction.price
 
                 # Add to buy lots for FIFO tracking
                 holdings[security_id]['buy_lots'].append({
@@ -88,82 +99,83 @@ class Portfolio(models.Model):
             elif transaction.transaction_type == 'SELL':
                 holdings[security_id]['quantity'] -= transaction.quantity
                 holdings[security_id]['total_proceeds'] += transaction.total_value
-                # Subtract from net cash invested (money in)
-                holdings[security_id]['net_cash_invested'] -= transaction.total_value
+
+                if transaction.base_amount:
+                    holdings[security_id]['net_cash_invested'] -= transaction.base_amount
+                else:
+                    holdings[security_id]['net_cash_invested'] -= transaction.total_value
 
                 # Calculate realized gains using FIFO
                 remaining_to_sell = transaction.quantity
                 for lot in holdings[security_id]['buy_lots']:
                     if remaining_to_sell <= 0:
                         break
-
                     if lot['remaining'] > 0:
                         sold_from_lot = min(lot['remaining'], remaining_to_sell)
                         cost_basis = sold_from_lot * lot['price']
                         proceeds = sold_from_lot * transaction.price
                         holdings[security_id]['realized_gains'] += (proceeds - cost_basis)
-
                         lot['remaining'] -= sold_from_lot
                         remaining_to_sell -= sold_from_lot
 
             elif transaction.transaction_type == 'DIVIDEND':
-                holdings[security_id]['total_dividends'] += transaction.total_value
-                # Subtract from net cash invested (money in)
-                holdings[security_id]['net_cash_invested'] -= transaction.total_value
-
-            # ADD THIS NEW SECTION FOR SPLITS
-            elif transaction.transaction_type == 'SPLIT':
-                # Parse split ratio
-                if transaction.split_ratio:
-                    try:
-                        # Split ratio format: "new:old" (e.g., "2:1")
-                        new_shares, old_shares = map(int, transaction.split_ratio.split(':'))
-                        multiplier = Decimal(new_shares) / Decimal(old_shares)
-
-                        # Add the new shares received
-                        # The quantity field contains the additional shares received
-                        holdings[security_id]['quantity'] += transaction.quantity
-
-                        # Adjust the price per share for all buy lots
-                        # This maintains the correct cost basis for tax purposes
-                        for lot in holdings[security_id]['buy_lots']:
-                            # Reduce the price per share
-                            lot['price'] = lot['price'] / multiplier
-                            # Increase the quantity in each lot
-                            lot['remaining'] = lot['remaining'] * multiplier
-
-                        # Note: net_cash_invested stays the same (no money in/out)
-                        # The average cost will be recalculated automatically below
-
-                    except (ValueError, ZeroDivisionError) as e:
-                        # Log error but continue processing
-                        print(f"Error processing split ratio {transaction.split_ratio}: {e}")
+                if transaction.base_amount:
+                    holdings[security_id]['total_dividends'] += transaction.base_amount
+                    holdings[security_id]['net_cash_invested'] -= transaction.base_amount
+                else:
+                    holdings[security_id]['total_dividends'] += transaction.total_value
+                    holdings[security_id]['net_cash_invested'] -= transaction.total_value
 
         # Calculate current metrics for each holding
         for security_id, data in holdings.items():
             if data['quantity'] > 0:
-                # Calculate average cost based on net cash invested
-                if data['quantity'] > 0:
-                    data['avg_cost'] = data['net_cash_invested'] / data['quantity']
-                    # Ensure average cost doesn't go negative
-                    if data['avg_cost'] < 0:
-                        data['avg_cost'] = Decimal('0')
+                # Average cost in security currency
+                if data['total_cost'] > 0:
+                    data['avg_cost'] = data['total_cost'] / data['quantity']
                 else:
                     data['avg_cost'] = Decimal('0')
 
-                # Calculate current value and unrealized gains
+                # Average cost in portfolio currency
+                if data['total_cost_base_currency'] > 0:
+                    data['avg_cost_base_currency'] = data['total_cost_base_currency'] / data['quantity']
+                else:
+                    data['avg_cost_base_currency'] = Decimal('0')
+
+                # Current value in security currency
                 data['current_value'] = data['quantity'] * data['security'].current_price
 
-                # For unrealized gains, compare current value to net invested amount
-                data['unrealized_gains'] = data['current_value'] - data['net_cash_invested']
+                # Convert current value to portfolio currency
+                if data['security'].currency != portfolio_currency:
+                    from .services.currency_service import CurrencyService
+                    try:
+                        data['current_value_base_currency'] = CurrencyService.convert_amount(
+                            data['current_value'],
+                            data['security'].currency,
+                            portfolio_currency
+                        )
+                    except:
+                        # Fallback to last exchange rate
+                        last_buy = next((t for t in reversed(data['transactions']) if t.transaction_type == 'BUY'),
+                                        None)
+                        if last_buy and last_buy.exchange_rate:
+                            data['current_value_base_currency'] = data['current_value'] * last_buy.exchange_rate
+                        else:
+                            data['current_value_base_currency'] = data['current_value']
+                else:
+                    data['current_value_base_currency'] = data['current_value']
+
+                # Calculate unrealized gains in portfolio currency
+                data['unrealized_gains'] = data['current_value_base_currency'] - data['total_cost_base_currency']
                 data['total_gains'] = data['realized_gains'] + data['unrealized_gains']
 
         # Filter out positions with 0 quantity
         return {k: v for k, v in holdings.items() if v['quantity'] > 0}
 
     def get_total_value(self):
-        """Get total portfolio value including cash"""
-        holdings_value = sum(h['current_value'] for h in self.get_holdings().values())
+        """Get total portfolio value including cash - all in base currency"""
+        holdings = self.get_holdings()
+        # Use current_value_base_currency for accurate total
+        holdings_value = sum(h.get('current_value_base_currency', h['current_value']) for h in holdings.values())
         cash_value = self.cash_account.balance if hasattr(self, 'cash_account') else Decimal('0')
         return holdings_value + cash_value
 
@@ -176,20 +188,22 @@ class Portfolio(models.Model):
         return summary
 
     def get_summary(self):
-        """Get portfolio summary statistics"""
+        """Get portfolio summary statistics - all values in base currency"""
         holdings = self.get_holdings()
 
-        total_value = sum(h['current_value'] for h in holdings.values())
-        # Use net_cash_invested for total cost instead of quantity * avg_cost
-        total_cost = sum(h.get('net_cash_invested', h['quantity'] * h['avg_cost']) for h in holdings.values())
-        total_gains = sum(h['total_gains'] for h in holdings.values())
+        # Calculate totals using base currency values
+        total_value = sum(h.get('current_value_base_currency', h['current_value']) for h in holdings.values())
+        total_cost = sum(h.get('total_cost_base_currency', h['total_cost']) for h in holdings.values())
+        total_gains = sum(h['unrealized_gains'] for h in holdings.values())
         total_dividends = sum(h['total_dividends'] for h in holdings.values())
+        total_realized_gains = sum(h['realized_gains'] for h in holdings.values())
 
         return {
             'total_value': total_value,
             'total_cost': total_cost,
             'total_gains': total_gains,
             'total_dividends': total_dividends,
+            'total_realized_gains': total_realized_gains,
             'total_return': total_gains + total_dividends,
             'total_return_pct': ((total_gains + total_dividends) / total_cost * 100) if total_cost > 0 else 0,
             'holdings_count': len(holdings)
