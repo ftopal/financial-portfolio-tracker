@@ -9,6 +9,7 @@ from rest_framework.decorators import api_view, action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from portfolio_project import settings
 from .models import (
     Portfolio, AssetCategory, Security, Transaction,
     PriceHistory, CashTransaction, UserPreferences,
@@ -389,6 +390,80 @@ class PortfolioViewSet(viewsets.ModelViewSet):
                 'exposure': exposure
             })
 
+    @action(detail=True, methods=['post'])
+    def recalculate_cash_balance(self, request, pk=None):
+        """Recalculate cash balance for this portfolio based on all transactions"""
+        portfolio = self.get_object()
+
+        try:
+            from .models import PortfolioCashAccount
+            cash_account, created = PortfolioCashAccount.objects.get_or_create(
+                portfolio=portfolio,
+                defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
+            )
+
+            if created:
+                return Response({'message': 'Cash account created', 'balance': float(cash_account.balance)})
+
+            old_balance = cash_account.balance
+
+            # Recalculate balance from all transactions
+            from django.db.models import Sum
+            total_amount = cash_account.transactions.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+            cash_account.balance = total_amount
+            cash_account.save()
+
+            difference = cash_account.balance - old_balance
+
+            return Response({
+                'message': 'Cash balance recalculated successfully',
+                'old_balance': float(old_balance),
+                'new_balance': float(cash_account.balance),
+                'difference': float(difference),
+                'transaction_count': cash_account.transactions.count()
+            })
+
+        except Exception as e:
+            return Response({'error': f'Failed to recalculate balance: {str(e)}'}, status=500)
+
+    @action(detail=True, methods=['get'])
+    def verify_cash_balance(self, request, pk=None):
+        """Verify that the cash balance is consistent with transaction history"""
+        portfolio = self.get_object()
+
+        try:
+            from .models import PortfolioCashAccount
+            try:
+                cash_account = PortfolioCashAccount.objects.get(portfolio=portfolio)
+            except PortfolioCashAccount.DoesNotExist:
+                return Response({
+                    'is_consistent': True,
+                    'message': 'No cash account exists yet',
+                    'stored_balance': 0,
+                    'calculated_balance': 0,
+                    'difference': 0
+                })
+
+            # Calculate what the balance should be
+            from django.db.models import Sum
+            calculated_balance = cash_account.transactions.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+            difference = cash_account.balance - calculated_balance
+            is_consistent = abs(difference) < Decimal('0.01')
+
+            return Response({
+                'is_consistent': is_consistent,
+                'stored_balance': float(cash_account.balance),
+                'calculated_balance': float(calculated_balance),
+                'difference': float(difference),
+                'transaction_count': cash_account.transactions.count(),
+                'message': 'Balance is consistent' if is_consistent else f'Balance inconsistency detected. Difference: {difference}'
+            })
+
+        except Exception as e:
+            return Response({'error': f'Failed to verify balance: {str(e)}'}, status=500)
+
 
 class SecurityViewSet(viewsets.ModelViewSet):
     queryset = Security.objects.all()
@@ -666,7 +741,11 @@ class CashTransactionViewSet(viewsets.ModelViewSet):
         serializer.save(user=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
-        """Override destroy to prevent deletion of auto-generated cash transactions"""
+        """
+        Override destroy to:
+        1. Prevent deletion of auto-generated cash transactions
+        2. Update cash account balance when deleting manual transactions
+        """
         instance = self.get_object()
 
         # Check if this cash transaction is related to a security transaction
@@ -677,8 +756,34 @@ class CashTransactionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Allow deletion of manual cash transactions (deposits/withdrawals)
-        return super().destroy(request, *args, **kwargs)
+        # Store the cash account and transaction details before deletion
+        cash_account = instance.cash_account
+        transaction_amount = instance.amount
+        transaction_type = instance.transaction_type
+
+        # Log the operation for debugging
+        logger.info(f"Deleting cash transaction: {transaction_type} of {transaction_amount}")
+        logger.info(f"Current cash balance before deletion: {cash_account.balance}")
+
+        # **CRITICAL FIX: Update the cash account balance by reversing the transaction**
+        reversal_amount = -transaction_amount
+
+        logger.info(f"Applying reversal amount: {reversal_amount}")
+
+        # Update the cash account balance
+        cash_account.update_balance(reversal_amount)
+
+        logger.info(f"New cash balance after reversal: {cash_account.balance}")
+
+        # Delete the transaction
+        response = super().destroy(request, *args, **kwargs)
+
+        # Return success response with updated balance info
+        return Response({
+            'message': f'{transaction_type} transaction deleted successfully',
+            'new_balance': float(cash_account.balance),
+            'reversed_amount': float(reversal_amount)
+        }, status=status.HTTP_200_OK)
 
 
 class UserPreferencesViewSet(viewsets.ModelViewSet):

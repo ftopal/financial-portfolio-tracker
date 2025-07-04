@@ -119,6 +119,8 @@ export const portfolioAPI = {
     const url = portfolioId ? `summary/?portfolio_id=${portfolioId}` : 'summary/';
     return API.get(url);
   },
+  recalculateBalance: (portfolioId) => API.post(`portfolios/${portfolioId}/recalculate_cash_balance/`),
+  verifyBalance: (portfolioId) => API.get(`portfolios/${portfolioId}/verify_cash_balance/`),
 
   getHoldings: (id) => API.get(`portfolios/${id}/holdings/`),
 

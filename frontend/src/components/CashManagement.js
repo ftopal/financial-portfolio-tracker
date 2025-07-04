@@ -107,8 +107,13 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
 
     setDeleting(true);
     try {
-      await api.cash.delete(transactionToDelete.id);
-      setSuccess(`Transaction deleted successfully`);
+      const response = await api.cash.delete(transactionToDelete.id);
+
+      if (response.data && response.data.new_balance !== undefined) {
+        setSuccess(`Transaction deleted successfully. New balance: ${formatCurrency(response.data.new_balance)}`);
+      } else {
+        setSuccess(`Transaction deleted successfully`);
+      }
 
       // Refresh data
       if (onBalanceUpdate) {
@@ -119,9 +124,60 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
       setDeleteConfirmOpen(false);
       setTransactionToDelete(null);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to delete transaction');
+      console.error('Delete error:', err);
+      const errorMessage = err.response?.data?.error || err.response?.data?.message || 'Failed to delete transaction';
+      setError(errorMessage);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleRecalculateBalance = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const response = await api.portfolios.recalculateBalance(portfolioId);
+
+      if (response.data) {
+        const { old_balance, new_balance, difference } = response.data;
+
+        if (Math.abs(difference) < 0.01) {
+          setSuccess('Balance verification passed - no adjustment needed');
+        } else {
+          setSuccess(`Balance recalculated: ${formatCurrency(old_balance)} → ${formatCurrency(new_balance)}`);
+        }
+
+        if (onBalanceUpdate) {
+          onBalanceUpdate();
+        }
+        fetchCashHistory();
+      }
+    } catch (err) {
+      setError('Failed to recalculate balance: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyBalance = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const response = await api.portfolios.verifyBalance(portfolioId);
+
+      if (response.data) {
+        const { is_consistent, stored_balance, calculated_balance, difference } = response.data;
+
+        if (is_consistent) {
+          setSuccess(`✅ Balance is consistent: ${formatCurrency(stored_balance)}`);
+        } else {
+          setError(`❌ Balance inconsistency detected! Difference: ${formatCurrency(difference)}`);
+        }
+      }
+    } catch (err) {
+      setError('Failed to verify balance: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -280,6 +336,30 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
 
         {tabValue === 1 && (
           <TableContainer component={Paper} variant="outlined" sx={{ mt: 2 }}>
+            <Box sx={{ mb: 3, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+              <Typography variant="h6" gutterBottom>Balance Management</Typography>
+              <Stack direction="row" spacing={2}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={handleVerifyBalance}
+                  disabled={loading}
+                  startIcon={<AccountBalanceIcon />}
+                >
+                  Verify Balance
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={handleRecalculateBalance}
+                  disabled={loading}
+                  startIcon={<AccountBalanceIcon />}
+                  color="warning"
+                >
+                  Recalculate Balance
+                </Button>
+              </Stack>
+            </Box>
             {historyLoading ? (
               <Box display="flex" justifyContent="center" p={3}>
                 <CircularProgress />

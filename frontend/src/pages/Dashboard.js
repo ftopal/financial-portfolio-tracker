@@ -26,6 +26,7 @@ import { api, currencyAPI } from '../services/api';
 import { extractDataArray } from '../utils/apiHelpers';
 import CurrencyContext from '../contexts/CurrencyContext';
 import CurrencySelector from '../components/CurrencySelector';
+import PortfolioDialog from '../components/PortfolioDialog'; // Add this import
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -37,6 +38,9 @@ const Dashboard = () => {
   const [loadingConversion, setLoadingConversion] = useState(false);
   const [localDisplayCurrency, setLocalDisplayCurrency] = useState('USD');
   const [currencyBreakdownConversions, setCurrencyBreakdownConversions] = useState({});
+
+  // Add state for portfolio dialog
+  const [showPortfolioDialog, setShowPortfolioDialog] = useState(false);
 
   // Use context values if available, otherwise use local state
   const displayCurrency = currencyContext?.displayCurrency || localDisplayCurrency;
@@ -127,30 +131,30 @@ const Dashboard = () => {
 
             console.log(`Converting ${portfolioTotalValue} ${currency} to ${displayCurrency}:`, response.data);
             const convertedValue = parseFloat(response.data.converted_amount || portfolioTotalValue);
+
+            // Convert gain/loss separately
+            const gainLossResponse = await currencyAPI.convert({
+              amount: gainLoss,
+              from_currency: currency,
+              to_currency: displayCurrency
+            });
+            const convertedGainLoss = parseFloat(gainLossResponse.data.converted_amount || gainLoss);
+
+            // Convert cash separately
+            const cashResponse = await currencyAPI.convert({
+              amount: cash,
+              from_currency: currency,
+              to_currency: displayCurrency
+            });
+            const convertedCash = parseFloat(cashResponse.data.converted_amount || cash);
+
             totalValue += convertedValue;
+            totalGainLoss += convertedGainLoss;
+            totalCash += convertedCash;
 
-            // Convert gain/loss
-            if (gainLoss !== 0) {
-              const gainLossResponse = await currencyAPI.convert({
-                amount: gainLoss,
-                from_currency: currency,
-                to_currency: displayCurrency
-              });
-              totalGainLoss += parseFloat(gainLossResponse.data.converted_amount || gainLoss);
-            }
-
-            // Convert cash balance separately for the summary
-            if (cash !== 0) {
-              const cashResponse = await currencyAPI.convert({
-                amount: cash,
-                from_currency: currency,
-                to_currency: displayCurrency
-              });
-              totalCash += parseFloat(cashResponse.data.converted_amount || cash);
-            }
-          } catch (err) {
-            console.error(`Failed to convert from ${currency} to ${displayCurrency}:`, err);
-            // Fallback to original values if conversion fails
+          } catch (conversionError) {
+            console.error(`Failed to convert ${currency} to ${displayCurrency}:`, conversionError);
+            // Fallback: use original values (not ideal, but prevents complete failure)
             totalValue += portfolioTotalValue;
             totalGainLoss += gainLoss;
             totalCash += cash;
@@ -158,15 +162,8 @@ const Dashboard = () => {
         }
       }
 
-      console.log('Final converted totals:', { totalValue, totalGainLoss, totalCash });
-      setConvertedTotals({ totalValue, totalGainLoss, totalCash });
-    } catch (err) {
-      console.error('Error converting currencies:', err);
-      // Fallback to non-converted values
       const totals = portfolios.reduce((acc, portfolio) => {
-        const totalVal = portfolio.total_value_with_cash ||
-          (parseFloat(portfolio.total_value || 0) + parseFloat(portfolio.cash_balance || 0));
-        acc.totalValue += totalVal;
+        acc.totalValue += parseFloat(portfolio.total_value_with_cash || portfolio.total_value || 0);
         acc.totalGainLoss += parseFloat(portfolio.total_gain_loss || 0);
         acc.totalCash += parseFloat(portfolio.cash_balance || 0);
         return acc;
@@ -228,190 +225,168 @@ const Dashboard = () => {
     setCurrencyBreakdownConversions(conversions);
   };
 
+  // Handler for opening portfolio creation dialog
+  const handleCreatePortfolio = () => {
+    setShowPortfolioDialog(true);
+  };
+
+  // Handler for closing portfolio dialog and refreshing data
+  const handlePortfolioDialogClose = () => {
+    setShowPortfolioDialog(false);
+    fetchPortfolios(); // Refresh portfolios list after creation
+  };
+
+  const totalsByCurrency = calculateTotalsByCurrency();
+
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="80vh">
-        <CircularProgress size={60} />
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
+        <CircularProgress />
       </Box>
     );
   }
 
-  if (error) {
-    return (
-      <Container maxWidth="lg" sx={{ mt: 4 }}>
-        <Alert severity="error">{error}</Alert>
-      </Container>
-    );
-  }
-
-  const totalsByCurrency = calculateTotalsByCurrency();
-  const currencyKeys = Object.keys(totalsByCurrency);
-  const hasMultipleCurrencies = currencyKeys.length > 1;
-
   return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      <Typography variant="h4" gutterBottom>
-        Portfolio Dashboard
-      </Typography>
+    <Container maxWidth="lg" sx={{ py: 4 }}>
+      {/* Header */}
+      <Box display="flex" justifyContent="between" alignItems="center" mb={4}>
+        <Typography variant="h4" component="h1" fontWeight="bold">
+          Portfolio Dashboard
+        </Typography>
+      </Box>
 
-      {/* Unified Summary Section */}
-      {portfolios.length > 0 && (
-        <Box sx={{ mb: 4 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-            <Typography variant="h6" display="flex" alignItems="center">
-              <LanguageIcon sx={{ mr: 1 }} />
-              Overall Summary
-            </Typography>
-            <CurrencySelector
-              value={displayCurrency}
-              onChange={(newCurrency) => setDisplayCurrency(newCurrency)}
-              label="Display Currency"
-              size="small"
-              showHelper={false}
-            />
-          </Box>
-
-          <Grid container spacing={3}>
-            <Grid item xs={12} sm={4}>
-              <Card sx={{ bgcolor: 'primary.50' }}>
-                <CardContent>
-                  <Stack spacing={1}>
-                    <Typography color="text.secondary" variant="body2">
-                      Total Portfolio Value
-                    </Typography>
-                    <Typography variant="h5" fontWeight="bold">
-                      {loadingConversion ? (
-                        <CircularProgress size={24} />
-                      ) : (
-                        formatCurrency(convertedTotals.totalValue, displayCurrency)
-                      )}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Combined across all portfolios
-                    </Typography>
-                  </Stack>
-                </CardContent>
-              </Card>
-            </Grid>
-
-            <Grid item xs={12} sm={4}>
-              <Card sx={{ bgcolor: convertedTotals.totalGainLoss >= 0 ? 'success.50' : 'error.50' }}>
-                <CardContent>
-                  <Stack spacing={1}>
-                    <Typography color="text.secondary" variant="body2">
-                      Total Gain/Loss
-                    </Typography>
-                    <Typography
-                      variant="h5"
-                      fontWeight="bold"
-                      color={convertedTotals.totalGainLoss >= 0 ? 'success.main' : 'error.main'}
-                    >
-                      {loadingConversion ? (
-                        <CircularProgress size={24} />
-                      ) : (
-                        formatCurrency(convertedTotals.totalGainLoss, displayCurrency)
-                      )}
-                    </Typography>
-                    {convertedTotals.totalGainLoss >= 0 ? (
-                      <Chip
-                        icon={<TrendingUpIcon />}
-                        label="Overall Profit"
-                        color="success"
-                        size="small"
-                      />
-                    ) : (
-                      <Chip
-                        icon={<TrendingDownIcon />}
-                        label="Overall Loss"
-                        color="error"
-                        size="small"
-                      />
-                    )}
-                  </Stack>
-                </CardContent>
-              </Card>
-            </Grid>
-
-            <Grid item xs={12} sm={4}>
-              <Card sx={{ bgcolor: 'info.50' }}>
-                <CardContent>
-                  <Stack spacing={1}>
-                    <Typography color="text.secondary" variant="body2">
-                      Total Cash Balance
-                    </Typography>
-                    <Typography variant="h5" fontWeight="bold">
-                      {loadingConversion ? (
-                        <CircularProgress size={24} />
-                      ) : (
-                        formatCurrency(convertedTotals.totalCash, displayCurrency)
-                      )}
-                    </Typography>
-                    <Chip
-                      icon={<AccountBalanceIcon />}
-                      label="Available across all portfolios"
-                      color="info"
-                      size="small"
-                    />
-                  </Stack>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-        </Box>
+      {error && (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          {error}
+        </Alert>
       )}
 
-      {/* Currency Breakdown Section - Only show if multiple currencies */}
-      {hasMultipleCurrencies && (
-        <Box sx={{ mb: 4 }}>
-          <Typography variant="h6" gutterBottom>
-            Breakdown by Currency
-          </Typography>
+      {/* Currency Selector */}
+      <Box mb={4}>
+        <Typography variant="h6" gutterBottom>
+          Display Currency
+        </Typography>
+        <Box display="flex" alignItems="center" gap={2}>
+          <LanguageIcon color="primary" />
+          <CurrencySelector
+            value={displayCurrency}
+            onChange={setDisplayCurrency}
+            variant="outlined"
+          />
+        </Box>
+      </Box>
+
+      {/* Portfolio Totals */}
+      <Grid container spacing={3} mb={4}>
+        <Grid item xs={12} md={4}>
           <Card>
             <CardContent>
-              <Grid container spacing={2}>
-                {currencyKeys.map((currency) => (
-                  <Grid item xs={12} md={4} key={currency}>
-                    <Box sx={{ p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }}>
-                      <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                        {currency} ({totalsByCurrency[currency].count} portfolio{totalsByCurrency[currency].count !== 1 ? 's' : ''})
-                      </Typography>
-                      <Typography variant="body1">
-                        Total Value: <strong>{formatCurrency(totalsByCurrency[currency].totalValue, currency)}</strong>
-                      </Typography>
-                      <Typography
-                        variant="body2"
-                        color={totalsByCurrency[currency].totalGainLoss >= 0 ? 'success.main' : 'error.main'}
-                      >
-                        Gain/Loss: {formatCurrency(totalsByCurrency[currency].totalGainLoss, currency)}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Cash: {formatCurrency(totalsByCurrency[currency].totalCash, currency)}
-                      </Typography>
-                      {currency !== displayCurrency && currencyBreakdownConversions[currency] && (
-                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
-                          ≈ {formatCurrency(currencyBreakdownConversions[currency], displayCurrency)} in {displayCurrency}
-                        </Typography>
-                      )}
-                    </Box>
-                  </Grid>
-                ))}
-              </Grid>
+              <Typography variant="h6" color="text.secondary" gutterBottom>
+                Total Portfolio Value
+              </Typography>
+              {loadingConversion ? (
+                <CircularProgress size={24} />
+              ) : (
+                <Typography variant="h4" fontWeight="bold" color="primary">
+                  {formatCurrency(convertedTotals.totalValue, displayCurrency)}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                Across all portfolios
+              </Typography>
             </CardContent>
           </Card>
+        </Grid>
+
+        <Grid item xs={12} md={4}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" color="text.secondary" gutterBottom>
+                Total Gain/Loss
+              </Typography>
+              {loadingConversion ? (
+                <CircularProgress size={24} />
+              ) : (
+                <Typography
+                  variant="h4"
+                  fontWeight="bold"
+                  color={convertedTotals.totalGainLoss >= 0 ? 'success.main' : 'error.main'}
+                >
+                  {formatCurrency(convertedTotals.totalGainLoss, displayCurrency)}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                Unrealized gains/losses
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} md={4}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" color="text.secondary" gutterBottom>
+                Total Cash
+              </Typography>
+              {loadingConversion ? (
+                <CircularProgress size={24} />
+              ) : (
+                <Typography variant="h4" fontWeight="bold">
+                  {formatCurrency(convertedTotals.totalCash, displayCurrency)}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                Available for investment
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+
+      {/* Currency Breakdown */}
+      {Object.keys(totalsByCurrency).length > 1 && (
+        <Box mb={4}>
+          <Typography variant="h6" gutterBottom>
+            By Currency
+          </Typography>
+          <Grid container spacing={2}>
+            {Object.entries(totalsByCurrency).map(([currency, data]) => (
+              <Grid item xs={12} sm={6} md={4} key={currency}>
+                <Card variant="outlined">
+                  <CardContent>
+                    <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                      {currency}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {data.count} portfolio{data.count !== 1 ? 's' : ''}
+                    </Typography>
+                    <Typography variant="h6">
+                      {formatCurrency(data.totalValue, currency)}
+                    </Typography>
+                    {currency !== displayCurrency && currencyBreakdownConversions[currency] && (
+                      <Typography variant="caption" color="text.secondary">
+                        ≈ {formatCurrency(currencyBreakdownConversions[currency], displayCurrency)}
+                      </Typography>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
         </Box>
       )}
 
       <Divider sx={{ my: 4 }} />
 
-      {/* Portfolio Cards */}
-      <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
-        <Typography variant="h5">
+      {/* Individual Portfolios */}
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+        <Typography variant="h5" fontWeight="bold">
           Your Portfolios
         </Typography>
         <Button
           variant="contained"
           startIcon={<AddIcon />}
-          onClick={() => navigate('/portfolios/new')}
+          onClick={handleCreatePortfolio} // Updated to use dialog instead of navigation
         >
           Create Portfolio
         </Button>
@@ -419,37 +394,24 @@ const Dashboard = () => {
 
       <Grid container spacing={3}>
         {portfolios.map((portfolio) => (
-          <Grid item xs={12} sm={6} md={4} key={portfolio.id}>
-            <Card sx={{ height: '100%' }}>
+          <Grid item xs={12} md={6} lg={4} key={portfolio.id}>
+            <Card>
               <CardContent>
                 <Stack spacing={2}>
-                  <Box display="flex" justifyContent="space-between" alignItems="center">
-                    <Typography variant="h6" component="div">
-                      {portfolio.name}
-                    </Typography>
-                    <Chip
-                      label={portfolio.base_currency || 'USD'}
-                      size="small"
-                      color="primary"
-                      variant="outlined"
-                    />
-                  </Box>
-
-                  {portfolio.description && (
-                    <Typography variant="body2" color="text.secondary">
-                      {portfolio.description}
-                    </Typography>
-                  )}
-
-                  <Box>
-                    <Typography variant="body2" color="text.secondary">
-                      Total Value
-                    </Typography>
-                    <Typography variant="h6">
-                      {formatCurrency(
-                        portfolio.total_value_with_cash || portfolio.total_value,
-                        portfolio.base_currency || 'USD'
-                      )}
+                  <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                    <Box>
+                      <Typography variant="h6" fontWeight="bold">
+                        {portfolio.name}
+                      </Typography>
+                      <Chip
+                        label={portfolio.base_currency || 'USD'}
+                        size="small"
+                        variant="outlined"
+                        icon={<AccountBalanceIcon />}
+                      />
+                    </Box>
+                    <Typography variant="h5" fontWeight="bold">
+                      {formatCurrency(portfolio.total_value_with_cash || portfolio.total_value || 0, portfolio.base_currency || 'USD')}
                     </Typography>
                   </Box>
 
@@ -505,7 +467,7 @@ const Dashboard = () => {
                 <Button
                   variant="contained"
                   startIcon={<AddIcon />}
-                  onClick={() => navigate('/portfolios/new')}
+                  onClick={handleCreatePortfolio} // Updated to use dialog instead of navigation
                 >
                   Create Portfolio
                 </Button>
@@ -514,6 +476,13 @@ const Dashboard = () => {
           </Grid>
         )}
       </Grid>
+
+      {/* Portfolio Creation Dialog */}
+      <PortfolioDialog
+        open={showPortfolioDialog}
+        onClose={handlePortfolioDialogClose}
+        portfolio={null} // null for creating new portfolio
+      />
     </Container>
   );
 };

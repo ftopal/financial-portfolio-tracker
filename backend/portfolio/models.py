@@ -5,6 +5,9 @@ from decimal import Decimal
 from django.utils import timezone
 from django.db.models import Sum, F, Q, Case, When, DecimalField
 from .models_currency import Currency, ExchangeRate
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Portfolio(models.Model):
@@ -670,8 +673,55 @@ class PortfolioCashAccount(models.Model):
 
     def update_balance(self, amount):
         """Update balance by amount (positive for deposits, negative for withdrawals)"""
+        from decimal import Decimal
         self.balance += Decimal(str(amount))
         self.save()
+
+    def recalculate_balance(self):
+        """
+        Recalculate balance from all transactions - useful for fixing inconsistencies
+        """
+        from decimal import Decimal
+        from django.db.models import Sum
+
+        # Sum all cash transactions for this account
+        total_amount = self.transactions.aggregate(
+            total=Sum('amount')
+        )['total'] or Decimal('0')
+
+        # Update balance
+        old_balance = self.balance
+        self.balance = total_amount
+        self.save()
+
+        # Log the operation
+        logger.info(f"Recalculated balance for {self.portfolio.name}: {old_balance} -> {self.balance}")
+
+        return {
+            'old_balance': float(old_balance),
+            'new_balance': float(self.balance),
+            'difference': float(self.balance - old_balance)
+        }
+
+    def get_balance_verification(self):
+        """
+        Verify that the current balance matches the sum of all transactions
+        """
+        from decimal import Decimal
+        from django.db.models import Sum
+
+        calculated_balance = self.transactions.aggregate(
+            total=Sum('amount')
+        )['total'] or Decimal('0')
+
+        difference = self.balance - calculated_balance
+
+        return {
+            'stored_balance': float(self.balance),
+            'calculated_balance': float(calculated_balance),
+            'difference': float(difference),
+            'is_consistent': abs(difference) < Decimal('0.01')  # Allow for minor rounding
+        }
 
 
 class CashTransaction(models.Model):
