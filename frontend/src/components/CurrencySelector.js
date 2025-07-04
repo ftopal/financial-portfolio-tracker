@@ -29,8 +29,26 @@ const CurrencySelector = ({
 
   const fetchCurrencies = async () => {
     try {
-      const response = await api.get('/api/currencies/');
-      setCurrencies(response.data);
+      // Use api.currencies.list() which is the method you defined
+      const response = await api.currencies.list();
+      console.log('Currency API response:', response);
+
+      // Handle different response structures
+      let currencyData;
+      if (Array.isArray(response.data)) {
+        currencyData = response.data;
+      } else if (response.data && Array.isArray(response.data.results)) {
+        // Handle paginated response
+        currencyData = response.data.results;
+      } else if (response.data && response.data.currencies) {
+        // Handle wrapped response
+        currencyData = response.data.currencies;
+      } else {
+        console.error('Unexpected response structure:', response);
+        throw new Error('Invalid response structure');
+      }
+
+      setCurrencies(currencyData);
       setError(null);
     } catch (err) {
       console.error('Failed to fetch currencies:', err);
@@ -42,6 +60,9 @@ const CurrencySelector = ({
         { code: 'GBP', name: 'British Pound', symbol: '£', decimal_places: 2 },
         { code: 'JPY', name: 'Japanese Yen', symbol: '¥', decimal_places: 0 },
         { code: 'CAD', name: 'Canadian Dollar', symbol: 'C$', decimal_places: 2 },
+        { code: 'AUD', name: 'Australian Dollar', symbol: 'A$', decimal_places: 2 },
+        { code: 'CHF', name: 'Swiss Franc', symbol: 'CHF', decimal_places: 2 },
+        { code: 'CNY', name: 'Chinese Yuan', symbol: '¥', decimal_places: 2 },
       ]);
     } finally {
       setLoading(false);

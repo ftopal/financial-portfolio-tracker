@@ -1,5 +1,5 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import api from '../services/api';
+import { api, currencyAPI } from '../services/api';
 
 const CurrencyContext = createContext({
   displayCurrency: 'USD',
@@ -41,7 +41,8 @@ export const CurrencyProvider = ({ children }) => {
 
   const loadCurrencies = async () => {
     try {
-      const response = await api.get('/api/currencies/');
+      // Use currencyAPI.list() instead of api.get()
+      const response = await currencyAPI.list();
       setCurrencies(response.data);
       setError(null);
     } catch (err) {
@@ -54,12 +55,25 @@ export const CurrencyProvider = ({ children }) => {
 
   const loadUserPreferences = async () => {
     try {
-      const response = await api.get('/api/user-preferences/');
-      if (response.data && response.data.default_currency) {
-        setDisplayCurrency(response.data.default_currency);
+      // Use api.preferences.get() instead of api.userPreferences.get()
+      const response = await api.preferences.get();
+
+      // Handle the response structure from your API
+      if (response && response.data) {
+        // Check if it's a paginated response
+        if (response.data.results && response.data.results.length > 0) {
+          const preferences = response.data.results[0];
+          if (preferences.default_currency) {
+            setDisplayCurrency(preferences.default_currency);
+          }
+        } else if (response.data.default_currency) {
+          // Direct response
+          setDisplayCurrency(response.data.default_currency);
+        }
       }
     } catch (err) {
       console.error('Failed to load user preferences:', err);
+      // Don't throw, just log the error
     }
   };
 
@@ -69,7 +83,8 @@ export const CurrencyProvider = ({ children }) => {
     }
 
     try {
-      const response = await api.post('/api/currencies/convert/', {
+      // Use currencyAPI.convert() instead of api.post()
+      const response = await currencyAPI.convert({
         amount,
         from_currency: fromCurrency,
         to_currency: toCurrency,
@@ -84,14 +99,17 @@ export const CurrencyProvider = ({ children }) => {
 
   const updateDisplayCurrency = async (newCurrency) => {
     setDisplayCurrency(newCurrency);
+    localStorage.setItem('displayCurrency', newCurrency);
 
     // Update user preferences on the server
     try {
-      await api.patch('/api/user-preferences/', {
+      // Use api.preferences.update() instead of api.userPreferences.update()
+      await api.preferences.update({
         default_currency: newCurrency
       });
     } catch (err) {
       console.error('Failed to update currency preference:', err);
+      // Don't throw, just log the error
     }
   };
 
