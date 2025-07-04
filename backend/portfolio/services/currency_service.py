@@ -226,6 +226,58 @@ class CurrencyService:
 
         return fx_impact
 
+    @classmethod
+    def normalize_currency_code(cls, currency_code):
+        """
+        Normalize currency codes to handle special cases like GBp (pence)
+        Returns tuple: (normalized_currency, conversion_factor)
+        """
+        if not currency_code:
+            return 'USD', Decimal('1')
+
+        currency_code = currency_code.upper().strip()
+
+        # Handle UK pence (GBp) -> convert to GBP
+        if currency_code == 'GBP':
+            return 'GBP', Decimal('0.01')  # 1 pence = 0.01 pounds
+        elif currency_code == 'GBP':
+            return 'GBP', Decimal('1')  # 1 pound = 1 pound
+
+        # Handle other potential special cases
+        elif currency_code in ['USD', 'EUR']:
+            return currency_code, Decimal('1')
+
+        # Default case
+        return currency_code, Decimal('1')
+
+    @classmethod
+    def convert_amount_with_normalization(cls, amount, from_currency, to_currency, date=None):
+        """
+        Convert amount between currencies with automatic normalization for special cases like GBp
+        """
+        if amount == 0:
+            return Decimal('0')
+
+        # Normalize currencies
+        from_currency_norm, from_factor = cls.normalize_currency_code(from_currency)
+        to_currency_norm, to_factor = cls.normalize_currency_code(to_currency)
+
+        # Apply pence conversion if needed
+        normalized_amount = amount * from_factor
+
+        # If both currencies are the same after normalization, just return the normalized amount
+        if from_currency_norm == to_currency_norm:
+            return normalized_amount / to_factor
+
+        # Get exchange rate between normalized currencies
+        rate = cls.get_exchange_rate(from_currency_norm, to_currency_norm, date)
+        if rate is None:
+            raise ValueError(f"No exchange rate available for {from_currency_norm}/{to_currency_norm}")
+
+        # Convert and apply target factor
+        converted_amount = normalized_amount * rate
+        return converted_amount / to_factor
+
 
 class ExchangeRateProvider:
     """Base class for exchange rate providers"""

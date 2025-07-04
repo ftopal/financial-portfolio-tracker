@@ -250,6 +250,133 @@ def update_portfolio_performance(portfolio_id):
         return None
 
 
+@shared_task(bind=True, max_retries=3)
+def sync_daily_exchange_rates(self):
+    """
+    Fetch yesterday's exchange rates to ensure we have historical data
+    This runs daily to catch any missed rates
+    """
+    from datetime import date, timedelta
+    from django.conf import settings
+    from .models_currency import ExchangeRate
+    import requests
+    from decimal import Decimal
+
+    try:
+        # Get yesterday's date (markets are closed, rates are final)
+        yesterday = date.today() - timedelta(days=1)
+
+        # Skip weekends (no forex trading)
+        if yesterday.weekday() >= 5:  # 5=Saturday, 6=Sunday
+            logger.info(f"Skipping weekend date: {yesterday}")
+            return f"Skipped weekend date: {yesterday}"
+
+        # Check if we already have yesterday's rates
+        existing_rates = ExchangeRate.objects.filter(date=yesterday).count()
+        if existing_rates >= 6:  # We expect 6 rates: USD/EUR, EUR/USD, USD/GBP, GBP/USD, EUR/GBP, GBP/EUR
+            logger.info(f"Yesterday's rates already exist: {yesterday}")
+            return f"Rates already exist for {yesterday}"
+
+        logger.info(f"Fetching exchange rates for {yesterday}")
+
+        # Get API key
+        api_key = getattr(settings, 'EXCHANGE_RATE_API_KEY', None)
+
+        # Currency pairs we need
+        currency_pairs = [
+            ('USD', 'EUR'),
+            ('USD', 'GBP'),
+            ('EUR', 'GBP'),
+        ]
+
+        rates_fetched = 0
+
+        for base_currency, target_currency in currency_pairs:
+            try:
+                # Build API URL for historical data
+                if api_key:
+                    # Paid API with historical endpoint
+                    url = f"https://v6.exchangerate-api.com/v6/{api_key}/history/{base_currency}/{yesterday.year}/{yesterday.month}/{yesterday.day}"
+                else:
+                    # Free alternative with historical data
+                    url = f"https://api.exchangerate.host/{yesterday}?base={base_currency}&symbols={target_currency}"
+
+                response = requests.get(url, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+
+                # Parse response based on API
+                if api_key:
+                    # Paid exchangerate-api.com format
+                    rates = data.get('conversion_rates', {})
+                else:
+                    # exchangerate.host format
+                    rates = data.get('rates', {})
+
+                if target_currency in rates:
+                    rate_value = Decimal(str(rates[target_currency]))
+
+                    # Store the rate (both directions)
+                    ExchangeRate.objects.update_or_create(
+                        from_currency=base_currency,
+                        to_currency=target_currency,
+                        date=yesterday,
+                        defaults={
+                            'rate': rate_value,
+                            'source': 'exchangerate-api.com' if api_key else 'exchangerate.host'
+                        }
+                    )
+
+                    # Store inverse rate
+                    inverse_rate = Decimal('1') / rate_value
+                    ExchangeRate.objects.update_or_create(
+                        from_currency=target_currency,
+                        to_currency=base_currency,
+                        date=yesterday,
+                        defaults={
+                            'rate': inverse_rate,
+                            'source': 'exchangerate-api.com' if api_key else 'exchangerate.host'
+                        }
+                    )
+
+                    rates_fetched += 2
+                    logger.info(f"Saved daily rate {base_currency}/{target_currency}: {rate_value}")
+
+                # Small delay between requests
+                import time
+                time.sleep(0.5)
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch {base_currency}/{target_currency} for {yesterday}: {e}")
+                continue
+
+        logger.info(f"Daily rate sync complete: {rates_fetched} rates saved for {yesterday}")
+        return f"Synced {rates_fetched} rates for {yesterday}"
+
+    except Exception as e:
+        logger.error(f"Daily rate sync failed: {e}")
+        # Retry with exponential backoff
+        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
+
+
+@shared_task
+def cleanup_old_exchange_rates():
+    """
+    Clean up very old exchange rates (keep last 5 years)
+    This prevents the database from growing too large
+    """
+    from datetime import date, timedelta
+    from .models_currency import ExchangeRate
+
+    # Keep last 5 years of data
+    cutoff_date = date.today() - timedelta(days=20 * 365)
+
+    deleted_count = ExchangeRate.objects.filter(date__lt=cutoff_date).delete()[0]
+    logger.info(f"Cleaned up {deleted_count} old exchange rate records (older than {cutoff_date})")
+
+    return {'deleted': deleted_count, 'cutoff_date': str(cutoff_date)}
+
+
 # Manual trigger tasks for testing
 @shared_task
 def test_celery():

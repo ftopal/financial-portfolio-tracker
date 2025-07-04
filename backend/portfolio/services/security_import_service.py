@@ -65,12 +65,21 @@ class SecurityImportService:
                 logger.warning(f"No price data available for {symbol}")
                 current_price = 0  # Set to 0 rather than failing
 
+            # Get currency from Yahoo Finance
+            currency = info.get('currency', 'USD')
+
+            # Handle UK stocks quoted in pence
+            if currency == 'GBP' and symbol.endswith('.L'):
+                # This is likely a UK stock quoted in pence
+                current_price = current_price / 100  # Convert pence to pounds
+                currency = 'GBP'  # Use GBP instead of GBp
+
             # Extract stock information with safe defaults
             stock_data = {
                 'symbol': info.get('symbol', symbol).upper(),
                 'name': info.get('longName') or info.get('shortName') or symbol,
                 'exchange': info.get('exchange', ''),
-                'currency': info.get('currency', 'USD'),
+                'currency': currency,
                 'country': info.get('country', ''),
                 'sector': info.get('sector', ''),
                 'industry': info.get('industry', ''),

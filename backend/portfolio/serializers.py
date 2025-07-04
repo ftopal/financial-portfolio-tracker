@@ -6,6 +6,7 @@ from .models import (
 from decimal import Decimal
 from rest_framework import serializers
 from .models import Currency, ExchangeRate
+from django.utils import timezone
 
 
 class CurrencySerializer(serializers.ModelSerializer):
@@ -90,18 +91,42 @@ class TransactionSerializer(serializers.ModelSerializer):
 
         # Calculate exchange rate if currency differs from portfolio currency
         portfolio = validated_data['portfolio']
-        if currency and currency != portfolio.currency:
+        portfolio_currency = portfolio.base_currency or portfolio.currency
+
+        if currency and currency != portfolio_currency:
             from .services.currency_service import CurrencyService
+            from django.utils import timezone
+
+            # Get the transaction date
+            transaction_date = validated_data.get('transaction_date', timezone.now()).date()
+
+            # Get exchange rate
             exchange_rate = CurrencyService.get_exchange_rate(
                 currency,
-                portfolio.currency,
-                validated_data.get('transaction_date', timezone.now()).date()
+                portfolio_currency,
+                transaction_date
             )
+
             if exchange_rate:
                 validated_data['exchange_rate'] = exchange_rate
-                # Calculate base amount
-                total_amount = validated_data['quantity'] * validated_data['price']
-                validated_data['base_amount'] = total_amount * exchange_rate
+
+                # Calculate base amount properly
+                quantity = validated_data.get('quantity', 0)
+                price = validated_data.get('price', 0)
+                fees = validated_data.get('fees', 0)
+                transaction_type = validated_data.get('transaction_type', 'BUY')
+
+                # Calculate total amount in original currency
+                if transaction_type == 'BUY':
+                    total_amount = (quantity * price) + fees
+                elif transaction_type == 'SELL':
+                    total_amount = (quantity * price) - fees
+                else:
+                    total_amount = quantity * price
+
+                # Convert to portfolio currency
+                base_amount = total_amount * exchange_rate
+                validated_data['base_amount'] = base_amount
 
         return super().create(validated_data)
 
