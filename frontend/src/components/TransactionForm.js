@@ -31,6 +31,7 @@ const TransactionForm = ({
   open,
   onClose,
   onSuccess,
+  onTransactionSaved,
   portfolioId,
   security = null,
   transaction = null,
@@ -62,6 +63,20 @@ const TransactionForm = ({
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   const [portfolioHoldings, setPortfolioHoldings] = useState({});
+
+  const [exchangeRateField, setExchangeRateField] = useState(''); // Manual exchange rate input
+  const [baseAmountField, setBaseAmountField] = useState(''); // Manual base amount input
+  const [autoExchangeRate, setAutoExchangeRate] = useState(null); // Fetched exchange rate
+  const [autoBaseAmount, setAutoBaseAmount] = useState(null); // Calculated base amount
+  const [isExchangeRateManual, setIsExchangeRateManual] = useState(false); // Track if user modified rate
+  const [isBaseAmountManual, setIsBaseAmountManual] = useState(false); // Track if user modified base amount
+
+  const formatCurrency = (amount, currency = 'USD') => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency
+    }).format(amount || 0);
+  };
 
   const fetchPortfolio = useCallback(async () => {
     try {
@@ -140,43 +155,55 @@ const TransactionForm = ({
 
         if (formData.currency === portfolioCurrency) {
           setExchangeRate(1);
+          setAutoExchangeRate(1);
+          setExchangeRateField('1.0000');
           setConvertedAmount(null);
           setConvertedAmountWithFees(null);
+          setAutoBaseAmount(null);
+          setBaseAmountField('');
           return;
         }
 
         // Calculate amount based on transaction type with proper decimal handling
         const quantity = parseFloat(formData.quantity || 0);
         const price = parseFloat(formData.price || 0);
+        const fees = parseFloat(formData.fees || 0);
 
         // Round to 8 decimal places to prevent precision issues
         const amount = formData.transaction_type === 'DIVIDEND'
-          ? Math.round(price * 100000000) / 100000000  // Round to 8 decimals
-          : Math.round((price * quantity) * 100000000) / 100000000;  // Round to 8 decimals
-
-        const fees = Math.round((parseFloat(formData.fees || 0)) * 100000000) / 100000000;
+          ? Math.round(price * 100000000) / 100000000
+          : Math.round((price * quantity) * 100000000) / 100000000;
 
         // Don't proceed if amount is 0 or invalid
         if (!amount || amount === 0 || isNaN(amount)) {
           setExchangeRate(null);
+          setAutoExchangeRate(null);
+          setExchangeRateField('');
           setConvertedAmount(null);
           setConvertedAmountWithFees(null);
+          setAutoBaseAmount(null);
+          setBaseAmountField('');
           return;
         }
 
-        // Convert the base amount with proper precision
+        // Fetch exchange rate for the transaction date
         const response = await currencyAPI.convert({
-          amount: Number(amount.toFixed(8)), // Limit to 8 decimal places
+          amount: 1, // Get rate for 1 unit
           from_currency: formData.currency,
           to_currency: portfolioCurrency,
           date: formData.transaction_date
         });
 
-        const rate = response.data.converted_amount / amount;
+        const rate = response.data.converted_amount;
         setExchangeRate(rate);
-        setConvertedAmount(response.data.converted_amount);
+        setAutoExchangeRate(rate);
 
-        // Calculate total with fees
+        // Set exchange rate field only if user hasn't manually modified it
+        if (!isExchangeRateManual) {
+          setExchangeRateField(rate.toFixed(4));
+        }
+
+        // Calculate base amount
         let totalInTransactionCurrency;
         if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
           totalInTransactionCurrency = amount + fees;
@@ -186,29 +213,31 @@ const TransactionForm = ({
           totalInTransactionCurrency = amount;
         }
 
-        // Round the total to prevent precision issues
-        totalInTransactionCurrency = Math.round(totalInTransactionCurrency * 100000000) / 100000000;
+        const currentRate = isExchangeRateManual ? parseFloat(exchangeRateField) : rate;
+        const calculatedBaseAmount = totalInTransactionCurrency * currentRate;
 
-        // Convert total with fees
-        if (fees > 0) {
-          const totalResponse = await currencyAPI.convert({
-            amount: Number(totalInTransactionCurrency.toFixed(8)),
-            from_currency: formData.currency,
-            to_currency: portfolioCurrency,
-            date: formData.transaction_date
-          });
-          setConvertedAmountWithFees(totalResponse.data.converted_amount);
-        } else {
-          setConvertedAmountWithFees(response.data.converted_amount);
+        setAutoBaseAmount(calculatedBaseAmount);
+
+        // Set base amount field only if user hasn't manually modified it
+        if (!isBaseAmountManual) {
+          setBaseAmountField(calculatedBaseAmount.toFixed(2));
         }
+
+        // Update other existing calculations
+        setConvertedAmount(amount * currentRate);
+        setConvertedAmountWithFees(calculatedBaseAmount);
 
       } catch (error) {
         console.error('Failed to fetch exchange rate:', error);
         setExchangeRate(null);
+        setAutoExchangeRate(null);
+        setExchangeRateField('');
         setConvertedAmount(null);
         setConvertedAmountWithFees(null);
+        setAutoBaseAmount(null);
+        setBaseAmountField('');
       }
-    }, [formData.currency, formData.quantity, formData.price, formData.fees, formData.transaction_date, formData.transaction_type, portfolio, portfolioData]);
+    }, [formData.currency, formData.quantity, formData.price, formData.fees, formData.transaction_date, formData.transaction_type, portfolio, portfolioData, exchangeRateField, isExchangeRateManual, isBaseAmountManual]);
 
   // Trigger exchange rate calculation
   useEffect(() => {
@@ -286,33 +315,121 @@ const TransactionForm = ({
     }
   };
 
+  const handleExchangeRateChange = (event) => {
+    const value = event.target.value;
+    setExchangeRateField(value);
+    setIsExchangeRateManual(true);
+
+    // Recalculate base amount with new rate
+    if (value && !isNaN(parseFloat(value))) {
+      const quantity = parseFloat(formData.quantity || 0);
+      const price = parseFloat(formData.price || 0);
+      const fees = parseFloat(formData.fees || 0);
+
+      let totalInTransactionCurrency;
+      if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
+        totalInTransactionCurrency = (quantity * price) + fees;
+      } else if (formData.transaction_type === 'SELL') {
+        totalInTransactionCurrency = (quantity * price) - fees;
+      } else {
+        totalInTransactionCurrency = quantity * price;
+      }
+
+      const newBaseAmount = totalInTransactionCurrency * parseFloat(value);
+
+      if (!isBaseAmountManual) {
+        setBaseAmountField(newBaseAmount.toFixed(2));
+      }
+
+      setConvertedAmountWithFees(newBaseAmount);
+    }
+  };
+
+  const handleBaseAmountChange = (event) => {
+    const value = event.target.value;
+    setBaseAmountField(value);
+    setIsBaseAmountManual(true);
+
+    // Update converted amount display
+    if (value && !isNaN(parseFloat(value))) {
+      setConvertedAmountWithFees(parseFloat(value));
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      const data = {
+      const currentPortfolio = portfolioData || portfolio;
+      const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
+      const transactionData = {
         portfolio: portfolioId,
         security: selectedSecurity.id,
-        ...formData,
+        transaction_type: formData.transaction_type,
+        transaction_date: formData.transaction_date,
         quantity: parseFloat(formData.quantity),
-        price: parseFloat(formData.price || 0),
-        fees: parseFloat(formData.fees || 0),
+        price: parseFloat(formData.price),
+        fees: parseFloat(formData.fees) || 0,
+        notes: formData.notes || '',
         currency: formData.currency,
-        split_ratio: formData.transaction_type === 'SPLIT' ? formData.split_ratio : undefined
+
+        // Include custom exchange rate and base amount if different currency
+        ...(formData.currency !== portfolioCurrency && {
+          exchange_rate: parseFloat(exchangeRateField),
+          base_amount: parseFloat(baseAmountField)
+        }),
+
+        // Handle split ratio for SPLIT transactions
+        ...(formData.transaction_type === 'SPLIT' && {
+          split_ratio: formData.split_ratio
+        }),
+
+        // Handle dividend per share for DIVIDEND transactions
+        ...(formData.transaction_type === 'DIVIDEND' && {
+          dividend_per_share: parseFloat(formData.price)
+        })
       };
 
+      let response;
       if (transaction) {
-        await api.transactions.update(transaction.id, data);
+        response = await api.transactions.update(transaction.id, transactionData);
       } else {
-        await api.transactions.create(data);
+        response = await api.transactions.create(transactionData);
       }
 
-      onSuccess();
+      console.log('Transaction saved:', response.data);
+
+      // Call the appropriate callback function
+      if (onTransactionSaved) {
+        onTransactionSaved();
+      } else if (onSuccess) {
+        onSuccess(); // Fallback to onSuccess if onTransactionSaved is not provided
+      }
+
       onClose();
+
+      // Reset form
+      setFormData({
+        transaction_type: 'BUY',
+        quantity: '',
+        price: '',
+        currency: currentPortfolio?.base_currency || 'USD',
+        transaction_date: new Date().toISOString().split('T')[0], // Reset to current date
+        fees: '0',
+        notes: '',
+        split_ratio: ''
+      });
+      setSelectedSecurity(null);
+      setExchangeRateField('');
+      setBaseAmountField('');
+      setIsExchangeRateManual(false);
+      setIsBaseAmountManual(false);
+
     } catch (err) {
-      console.error('Transaction error:', err);
+      console.error('Error saving transaction:', err);
       setError(err.response?.data?.detail || 'Failed to save transaction');
     } finally {
       setLoading(false);
@@ -552,6 +669,34 @@ const TransactionForm = ({
               />
             )}
           </Box>
+
+          {/* Exchange Rate Field - NEW (separate row) */}
+          {formData.currency !== portfolioCurrency && (
+            <TextField
+              type="number"
+              label={`Exchange Rate (1 ${formData.currency} = ? ${portfolioCurrency})`}
+              value={exchangeRateField}
+              onChange={handleExchangeRateChange}
+              inputProps={{ step: "0.0001", min: "0" }}
+              fullWidth
+              sx={{ mb: 2 }}
+              helperText={autoExchangeRate ? `Historical rate: ${autoExchangeRate.toFixed(4)}` : ''}
+            />
+          )}
+
+          {/* Total Cost in Portfolio Currency Field - NEW (separate row) */}
+          {formData.currency !== portfolioCurrency && formData.transaction_type !== 'SPLIT' && (
+            <TextField
+              type="number"
+              label={`Total Cost (${portfolioCurrency})`}
+              value={baseAmountField}
+              onChange={handleBaseAmountChange}
+              inputProps={{ step: "0.01", min: "0" }}
+              fullWidth
+              sx={{ mb: 2 }}
+              helperText={autoBaseAmount ? `Auto calculated: ${formatCurrency(autoBaseAmount, portfolioCurrency)}` : ''}
+            />
+          )}
 
           <TextField
             multiline

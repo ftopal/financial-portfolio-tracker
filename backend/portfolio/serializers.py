@@ -59,17 +59,22 @@ class TransactionSerializer(serializers.ModelSerializer):
     security_symbol = serializers.ReadOnlyField(source='security.symbol')
     security_name = serializers.ReadOnlyField(source='security.name')
     portfolio_name = serializers.ReadOnlyField(source='portfolio.name')
+
     total_value = serializers.ReadOnlyField()
     currency = serializers.CharField(max_length=3, required=False)
+
+    # CRITICAL: Make these fields WRITABLE (remove read_only=True)
     exchange_rate = serializers.DecimalField(
         max_digits=20,
         decimal_places=8,
-        read_only=True
+        required=False,  # Optional - will auto-calculate if not provided
+        allow_null=True
     )
     base_amount = serializers.DecimalField(
         max_digits=20,
         decimal_places=2,
-        read_only=True
+        required=False,  # Optional - will auto-calculate if not provided
+        allow_null=True
     )
 
     class Meta:
@@ -94,29 +99,46 @@ class TransactionSerializer(serializers.ModelSerializer):
         portfolio_currency = portfolio.base_currency or portfolio.currency
 
         if currency and currency != portfolio_currency:
-            from .services.currency_service import CurrencyService
-            from django.utils import timezone
+            # CHECK IF USER PROVIDED CUSTOM VALUES
+            user_exchange_rate = validated_data.get('exchange_rate')
+            user_base_amount = validated_data.get('base_amount')
 
-            # Get the transaction date
-            transaction_date = validated_data.get('transaction_date', timezone.now()).date()
+            print(f"DEBUG: User provided exchange_rate: {user_exchange_rate}")
+            print(f"DEBUG: User provided base_amount: {user_base_amount}")
 
-            # Get exchange rate
-            exchange_rate = CurrencyService.get_exchange_rate(
-                currency,
-                portfolio_currency,
-                transaction_date
-            )
+            if user_exchange_rate is not None:
+                # USER PROVIDED CUSTOM EXCHANGE RATE - USE IT
+                validated_data['exchange_rate'] = user_exchange_rate
 
-            if exchange_rate:
-                validated_data['exchange_rate'] = exchange_rate
+                # If user also provided base_amount, use it; otherwise calculate
+                if user_base_amount is not None:
+                    validated_data['base_amount'] = user_base_amount
+                else:
+                    # Calculate base amount using user's exchange rate
+                    quantity = validated_data.get('quantity', 0)
+                    price = validated_data.get('price', 0)
+                    fees = validated_data.get('fees', 0)
+                    transaction_type = validated_data.get('transaction_type')
 
-                # Calculate base amount properly
+                    if transaction_type == 'BUY':
+                        total_amount = (quantity * price) + fees
+                    elif transaction_type == 'SELL':
+                        total_amount = (quantity * price) - fees
+                    else:
+                        total_amount = quantity * price
+
+                    validated_data['base_amount'] = total_amount * user_exchange_rate
+
+            elif user_base_amount is not None:
+                # USER PROVIDED BASE AMOUNT BUT NOT EXCHANGE RATE
+                validated_data['base_amount'] = user_base_amount
+
+                # Calculate the implied exchange rate
                 quantity = validated_data.get('quantity', 0)
                 price = validated_data.get('price', 0)
                 fees = validated_data.get('fees', 0)
-                transaction_type = validated_data.get('transaction_type', 'BUY')
+                transaction_type = validated_data.get('transaction_type')
 
-                # Calculate total amount in original currency
                 if transaction_type == 'BUY':
                     total_amount = (quantity * price) + fees
                 elif transaction_type == 'SELL':
@@ -124,11 +146,82 @@ class TransactionSerializer(serializers.ModelSerializer):
                 else:
                     total_amount = quantity * price
 
-                # Convert to portfolio currency
-                base_amount = total_amount * exchange_rate
-                validated_data['base_amount'] = base_amount
+                if total_amount > 0:
+                    calculated_rate = user_base_amount / total_amount
+                    validated_data['exchange_rate'] = calculated_rate
+
+            else:
+                # NO USER OVERRIDE - USE AUTOMATIC CALCULATION (existing logic)
+                from .services.currency_service import CurrencyService
+                from django.utils import timezone
+
+                # Get the transaction date
+                transaction_date = validated_data.get('transaction_date', timezone.now()).date()
+
+                # Get exchange rate
+                exchange_rate = CurrencyService.get_exchange_rate(
+                    currency,
+                    portfolio_currency,
+                    transaction_date
+                )
+
+                if exchange_rate:
+                    validated_data['exchange_rate'] = exchange_rate
+
+                    # Calculate base amount properly
+                    quantity = validated_data.get('quantity', 0)
+                    price = validated_data.get('price', 0)
+                    fees = validated_data.get('fees', 0)
+                    transaction_type = validated_data.get('transaction_type')
+
+                    if transaction_type == 'BUY':
+                        total_amount = (quantity * price) + fees
+                    elif transaction_type == 'SELL':
+                        total_amount = (quantity * price) - fees
+                    else:
+                        total_amount = quantity * price
+
+                    validated_data['base_amount'] = total_amount * exchange_rate
+
+        print(f"DEBUG: Final exchange_rate in validated_data: {validated_data.get('exchange_rate')}")
+        print(f"DEBUG: Final base_amount in validated_data: {validated_data.get('base_amount')}")
 
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Similar logic for updates
+        currency = validated_data.get('currency', instance.currency)
+        portfolio = instance.portfolio
+        portfolio_currency = portfolio.base_currency or portfolio.currency
+
+        if currency and currency != portfolio_currency:
+            user_exchange_rate = validated_data.get('exchange_rate')
+            user_base_amount = validated_data.get('base_amount')
+
+            # If user provided custom values, use them
+            if user_exchange_rate is not None or user_base_amount is not None:
+                quantity = validated_data.get('quantity', instance.quantity)
+                price = validated_data.get('price', instance.price)
+                fees = validated_data.get('fees', instance.fees)
+                transaction_type = validated_data.get('transaction_type', instance.transaction_type)
+
+                if transaction_type == 'BUY':
+                    total_amount = (quantity * price) + fees
+                elif transaction_type == 'SELL':
+                    total_amount = (quantity * price) - fees
+                else:
+                    total_amount = quantity * price
+
+                if user_exchange_rate is not None and user_base_amount is None:
+                    # User provided rate, calculate amount
+                    validated_data['base_amount'] = total_amount * user_exchange_rate
+                elif user_base_amount is not None and user_exchange_rate is None:
+                    # User provided amount, calculate rate
+                    if total_amount > 0:
+                        validated_data['exchange_rate'] = user_base_amount / total_amount
+                # If both provided, use both as-is
+
+        return super().update(instance, validated_data)
 
 
 class HoldingSerializer(serializers.Serializer):
