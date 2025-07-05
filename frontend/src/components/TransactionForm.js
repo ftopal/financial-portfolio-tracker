@@ -133,75 +133,82 @@ const TransactionForm = ({
   }, [selectedSecurity]);
 
   // Calculate exchange rate when currency or amount changes
-  const fetchExchangeRate = useCallback(async () => {
-    try {
-      const currentPortfolio = portfolioData || portfolio;
-      const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+    const fetchExchangeRate = useCallback(async () => {
+      try {
+        const currentPortfolio = portfolioData || portfolio;
+        const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
 
-      if (formData.currency === portfolioCurrency) {
-        setExchangeRate(1);
-        setConvertedAmount(null);
-        setConvertedAmountWithFees(null);
-        return;
-      }
+        if (formData.currency === portfolioCurrency) {
+          setExchangeRate(1);
+          setConvertedAmount(null);
+          setConvertedAmountWithFees(null);
+          return;
+        }
 
-      // Calculate amount based on transaction type
-      const amount = formData.transaction_type === 'DIVIDEND'
-        ? parseFloat(formData.price || 0)
-        : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);
+        // Calculate amount based on transaction type with proper decimal handling
+        const quantity = parseFloat(formData.quantity || 0);
+        const price = parseFloat(formData.price || 0);
 
-      const fees = parseFloat(formData.fees || 0);
+        // Round to 8 decimal places to prevent precision issues
+        const amount = formData.transaction_type === 'DIVIDEND'
+          ? Math.round(price * 100000000) / 100000000  // Round to 8 decimals
+          : Math.round((price * quantity) * 100000000) / 100000000;  // Round to 8 decimals
 
-      // Don't proceed if amount is 0
-      if (!amount || amount === 0) {
-        setExchangeRate(null);
-        setConvertedAmount(null);
-        setConvertedAmountWithFees(null);
-        return;
-      }
+        const fees = Math.round((parseFloat(formData.fees || 0)) * 100000000) / 100000000;
 
-      // Convert the base amount
-      const response = await currencyAPI.convert({
-        amount: amount,
-        from_currency: formData.currency,
-        to_currency: portfolioCurrency,
-        date: formData.transaction_date
-      });
+        // Don't proceed if amount is 0 or invalid
+        if (!amount || amount === 0 || isNaN(amount)) {
+          setExchangeRate(null);
+          setConvertedAmount(null);
+          setConvertedAmountWithFees(null);
+          return;
+        }
 
-      const rate = response.data.converted_amount / amount;
-      setExchangeRate(rate);
-      setConvertedAmount(response.data.converted_amount);
-
-      // Calculate total with fees
-      let totalInTransactionCurrency;
-      if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
-        totalInTransactionCurrency = amount + fees;
-      } else if (formData.transaction_type === 'SELL') {
-        totalInTransactionCurrency = amount - fees;
-      } else {
-        totalInTransactionCurrency = amount;
-      }
-
-      // Convert total with fees
-      if (fees > 0) {
-        const totalResponse = await currencyAPI.convert({
-          amount: totalInTransactionCurrency,
+        // Convert the base amount with proper precision
+        const response = await currencyAPI.convert({
+          amount: Number(amount.toFixed(8)), // Limit to 8 decimal places
           from_currency: formData.currency,
           to_currency: portfolioCurrency,
           date: formData.transaction_date
         });
-        setConvertedAmountWithFees(totalResponse.data.converted_amount);
-      } else {
-        setConvertedAmountWithFees(response.data.converted_amount);
-      }
 
-    } catch (err) {
-      console.error('Failed to fetch exchange rate:', err);
-      setExchangeRate(null);
-      setConvertedAmount(null);
-      setConvertedAmountWithFees(null);
-    }
-  }, [formData.price, formData.quantity, formData.currency, formData.transaction_date, formData.transaction_type, formData.fees, portfolioData, portfolio]);
+        const rate = response.data.converted_amount / amount;
+        setExchangeRate(rate);
+        setConvertedAmount(response.data.converted_amount);
+
+        // Calculate total with fees
+        let totalInTransactionCurrency;
+        if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
+          totalInTransactionCurrency = amount + fees;
+        } else if (formData.transaction_type === 'SELL') {
+          totalInTransactionCurrency = amount - fees;
+        } else {
+          totalInTransactionCurrency = amount;
+        }
+
+        // Round the total to prevent precision issues
+        totalInTransactionCurrency = Math.round(totalInTransactionCurrency * 100000000) / 100000000;
+
+        // Convert total with fees
+        if (fees > 0) {
+          const totalResponse = await currencyAPI.convert({
+            amount: Number(totalInTransactionCurrency.toFixed(8)),
+            from_currency: formData.currency,
+            to_currency: portfolioCurrency,
+            date: formData.transaction_date
+          });
+          setConvertedAmountWithFees(totalResponse.data.converted_amount);
+        } else {
+          setConvertedAmountWithFees(response.data.converted_amount);
+        }
+
+      } catch (error) {
+        console.error('Failed to fetch exchange rate:', error);
+        setExchangeRate(null);
+        setConvertedAmount(null);
+        setConvertedAmountWithFees(null);
+      }
+    }, [formData.currency, formData.quantity, formData.price, formData.fees, formData.transaction_date, formData.transaction_type, portfolio, portfolioData]);
 
   // Trigger exchange rate calculation
   useEffect(() => {

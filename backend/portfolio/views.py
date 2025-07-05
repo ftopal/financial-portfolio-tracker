@@ -920,36 +920,70 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 # Percentage based on total cost including fees
                 gain_loss_percentage = (gain_loss_total / total_cost_with_fees * 100) if total_cost_with_fees > 0 else 0
 
-                # Convert gain/loss to portfolio currency if needed
-                if transaction.currency != portfolio_currency and transaction.exchange_rate:
-                    gain_loss_base_currency = gain_loss_total * transaction.exchange_rate
+                # Convert gain/loss to portfolio currency using CURRENT exchange rate
+                if transaction.currency != portfolio_currency:
+                    try:
+                        from .services.currency_service import CurrencyService
+                        # Use current exchange rate for gain/loss conversion
+                        current_exchange_rate = CurrencyService.get_exchange_rate(
+                            transaction.currency,
+                            portfolio_currency
+                        )
+
+                        if current_exchange_rate:
+                            gain_loss_base_currency = gain_loss_total * current_exchange_rate
+                        else:
+                            # Fallback to historical rate if current rate not available
+                            gain_loss_base_currency = gain_loss_total * (transaction.exchange_rate or 1)
+                    except Exception as e:
+                        # Fallback to historical rate if conversion fails
+                        gain_loss_base_currency = gain_loss_total * (transaction.exchange_rate or 1)
                 else:
                     gain_loss_base_currency = gain_loss_total
-            else:
-                gain_loss_total = 0
-                gain_loss_percentage = 0
-                gain_loss_base_currency = 0
 
-            transaction_data = {
-                'id': transaction.id,
-                'stock_id': transaction.security.id,
-                'transaction_type': transaction.transaction_type,
-                'transaction_date': transaction.transaction_date,
-                'quantity': float(transaction.quantity),
-                'price': float(transaction.price),
-                'current_price': float(data['security'].current_price),
-                'fees': float(transaction.fees),
-                'currency': transaction.currency,
-                'exchange_rate': float(transaction.exchange_rate) if transaction.exchange_rate else 1,
-                'base_amount': float(transaction.base_amount) if transaction.base_amount else None,
-                # Value in portfolio base currency
-                'value': float(transaction.base_amount) if transaction.base_amount else float(transaction.total_value),
-                # Gain/loss in transaction currency
-                'gain_loss': float(gain_loss_total),
-                'gain_loss_percentage': float(gain_loss_percentage),
-                # Gain/loss in portfolio base currency for display
-                'gain_loss_base_currency': float(gain_loss_base_currency),
-            }
+                # Convert total cost to portfolio currency using HISTORICAL rate (transaction date rate)
+                if transaction.currency != portfolio_currency and transaction.exchange_rate:
+                    total_cost_base_currency = total_cost_with_fees * transaction.exchange_rate
+                else:
+                    total_cost_base_currency = total_cost_with_fees
+
+                transaction_data = {
+                    'id': transaction.id,
+                    'date': transaction.transaction_date.strftime('%Y-%m-%d'),
+                    'transaction_date': transaction.transaction_date.strftime('%Y-%m-%d'),
+                    'transaction_type': transaction.transaction_type,
+                    'quantity': float(transaction.quantity),
+                    'price': float(transaction.price),
+                    'fees': float(transaction.fees or 0),
+                    'value': float(total_cost_base_currency),  # Show converted amount as primary
+                    'value_original': float(total_cost_with_fees),  # Original amount
+                    'total_cost': float(total_cost_with_fees),
+                    'gain_loss': float(gain_loss_total),  # In original currency
+                    'gain_loss_total': float(gain_loss_total),
+                    'gain_loss_base_currency': float(gain_loss_base_currency),  # Converted using current rate
+                    'gain_loss_percentage': float(gain_loss_percentage),
+                    'currency': transaction.currency,
+                    'exchange_rate': float(transaction.exchange_rate or 1),
+                    'stock_id': transaction.security.id
+                }
+            else:
+                # Handle other transaction types (SELL, DIVIDEND, etc.)
+                total_amount = transaction.quantity * (transaction.price or 0)
+
+                transaction_data = {
+                    'id': transaction.id,
+                    'date': transaction.transaction_date.strftime('%Y-%m-%d'),
+                    'transaction_date': transaction.transaction_date.strftime('%Y-%m-%d'),
+                    'transaction_type': transaction.transaction_type,
+                    'quantity': float(transaction.quantity),
+                    'price': float(transaction.price or 0),
+                    'fees': float(transaction.fees or 0),
+                    'value': float(total_amount),  # Frontend expects 'value'
+                    'total_amount': float(total_amount),
+                    'currency': transaction.currency,
+                    'exchange_rate': float(transaction.exchange_rate or 1),
+                    'stock_id': transaction.security.id
+                }
 
             transactions.append(transaction_data)
 
@@ -974,13 +1008,14 @@ def portfolio_holdings_consolidated(request, portfolio_id):
             avg_cost_base_currency = total_cost_base_currency / data['quantity'] if data['quantity'] > 0 else Decimal(
                 '0')
 
-            # Convert current value to portfolio currency
+            # Convert current value to portfolio currency using CURRENT exchange rate
             security_currency = data['security'].currency
             current_value_base_currency = data['current_value']  # This is in security currency
 
             if security_currency != portfolio_currency:
                 from .services.currency_service import CurrencyService
                 try:
+                    # Use CURRENT exchange rate for current value conversion
                     current_value_base_currency = CurrencyService.convert_amount(
                         data['current_value'],
                         security_currency,
@@ -1003,22 +1038,21 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 # Current price in original currency
                 'current_price': float(data['security'].current_price),
                 'current_price_currency': security_currency,
-                # Total value in portfolio base currency
+                # Total value in portfolio base currency (using CURRENT exchange rate)
                 'total_current_value': float(current_value_base_currency),
                 # Total cost in portfolio base currency
                 'total_cost': float(total_cost_base_currency),
-                # Gain/loss in portfolio base currency
+                # Gain/loss in portfolio base currency (using CURRENT rate for current value)
                 'total_gain_loss': float(current_value_base_currency - total_cost_base_currency),
                 'total_dividends': float(data['total_dividends']),
                 'gain_loss_percentage': float(
                     ((current_value_base_currency - total_cost_base_currency) / total_cost_base_currency * 100)
                     if total_cost_base_currency > 0 else 0
                 ),
-                'transactions': sorted(transactions, key=lambda x: x['transaction_date'], reverse=True)
+                'transactions': sorted(transactions, key=lambda x: x['date'], reverse=True)
             }
             consolidated_assets.append(consolidated_asset)
 
-    # Rest remains the same...
     # Sort by total value descending
     consolidated_assets.sort(key=lambda x: x['total_current_value'], reverse=True)
 
