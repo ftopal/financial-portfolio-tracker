@@ -905,6 +905,61 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         # Build transactions list
         transactions = []
 
+        # NEW: Calculate proper average costs in both currencies
+        portfolio_base_currency = portfolio.base_currency or portfolio.currency
+        security_currency = data['security'].currency
+
+        # Get all transactions for this security
+        security_transactions = Transaction.objects.filter(
+            portfolio=portfolio,
+            security=data['security'],
+            transaction_type__in=['BUY', 'SELL']
+        ).order_by('transaction_date')
+
+        # Calculate weighted average costs
+        total_cost_portfolio_currency = Decimal('0')
+        total_cost_security_currency = Decimal('0')
+        total_quantity = Decimal('0')
+
+        for transaction in security_transactions:
+            transaction_cost = (transaction.quantity * transaction.price) + (transaction.fees or 0)
+
+            if transaction.transaction_type == 'BUY':
+                # Add to totals
+                total_quantity += transaction.quantity
+                total_cost_security_currency += transaction_cost
+
+                # Convert to portfolio currency using historical rate
+                if transaction.exchange_rate:
+                    total_cost_portfolio_currency += transaction_cost * transaction.exchange_rate
+                else:
+                    # Fallback: use current rate if historical not available
+                    current_rate = CurrencyService.get_exchange_rate(
+                        security_currency, portfolio_base_currency
+                    )
+                    total_cost_portfolio_currency += transaction_cost * (current_rate or 1)
+
+            elif transaction.transaction_type == 'SELL':
+                # Subtract from totals (FIFO or weighted average)
+                sell_quantity = transaction.quantity
+                total_quantity -= sell_quantity
+
+                # Calculate proportional cost reduction
+                if total_quantity > 0:
+                    cost_per_share_security = total_cost_security_currency / (total_quantity + sell_quantity)
+                    cost_per_share_portfolio = total_cost_portfolio_currency / (total_quantity + sell_quantity)
+
+                    total_cost_security_currency -= cost_per_share_security * sell_quantity
+                    total_cost_portfolio_currency -= cost_per_share_portfolio * sell_quantity
+
+        # Calculate accurate average costs
+        if total_quantity > 0:
+            avg_cost_portfolio_currency = total_cost_portfolio_currency / total_quantity
+            avg_cost_security_currency = total_cost_security_currency / total_quantity
+        else:
+            avg_cost_portfolio_currency = Decimal('0')
+            avg_cost_security_currency = Decimal('0')
+
         for transaction in data['transactions']:
             # Calculate gain/loss for this specific transaction in its original currency
             if transaction.transaction_type == 'BUY':
@@ -1026,6 +1081,15 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                     last_rate = transactions[-1]['exchange_rate'] if transactions else 1
                     current_value_base_currency = data['current_value'] * Decimal(str(last_rate))
 
+            # Calculate total cost in original currency
+            security_currency = data['security'].currency
+            total_cost_original_currency = Decimal('0')
+
+            for tx in data['transactions']:
+                if tx.transaction_type == 'BUY':
+                    tx_cost_original = (tx.quantity * tx.price) + (tx.fees or 0)
+                    total_cost_original_currency += tx_cost_original
+
             consolidated_asset = {
                 'key': f"{data['security'].symbol}_{security_id}",
                 'symbol': data['security'].symbol,
@@ -1035,6 +1099,8 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 'total_quantity': float(data['quantity']),
                 # Average cost in portfolio base currency (includes fees)
                 'avg_cost_price': float(avg_cost_base_currency),
+                'avg_cost_price_original': float(total_cost_original_currency / data['quantity']) if data['quantity'] > 0 else 0,
+                'security_currency': security_currency,
                 # Current price in original currency
                 'current_price': float(data['security'].current_price),
                 'current_price_currency': security_currency,
@@ -1042,6 +1108,7 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 'total_current_value': float(current_value_base_currency),
                 # Total cost in portfolio base currency
                 'total_cost': float(total_cost_base_currency),
+                'total_cost_original': float(total_cost_original_currency),
                 # Gain/loss in portfolio base currency (using CURRENT rate for current value)
                 'total_gain_loss': float(current_value_base_currency - total_cost_base_currency),
                 'total_dividends': float(data['total_dividends']),

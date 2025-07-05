@@ -403,6 +403,7 @@ const ConsolidatedPortfolioDetails = () => {
                   <TableCell align="right">Quantity</TableCell>
                   <TableCell align="right">Avg Cost ({portfolio?.base_currency || 'USD'})</TableCell>
                   <TableCell align="right">Current Price ({portfolio?.base_currency || 'USD'})</TableCell>
+                  <TableCell align="right">Total Cost ({portfolio?.base_currency || 'USD'})</TableCell>
                   <TableCell align="right">Total Value ({portfolio?.base_currency || 'USD'})</TableCell>
                   <TableCell align="right">Gain/Loss ({portfolio?.base_currency || 'USD'})</TableCell>
                 </TableRow>
@@ -431,7 +432,20 @@ const ConsolidatedPortfolioDetails = () => {
                         </Box>
                       </TableCell>
                       <TableCell align="right">{asset.total_quantity.toLocaleString()}</TableCell>
-                      <TableCell align="right">{formatCurrency(asset.avg_cost_price)}</TableCell>
+                      <TableCell align="right">
+                        {/* Show avg cost in portfolio currency */}
+                        <Typography variant="body2">
+                          {formatCurrency(asset.avg_cost_price, portfolio?.base_currency)}
+                        </Typography>
+                        {/* Show original avg cost in security currency below if different */}
+                        {asset.security_currency &&
+                         asset.security_currency !== portfolio?.base_currency &&
+                         asset.avg_cost_price_original && (
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            ({formatCurrency(asset.avg_cost_price_original, asset.security_currency)})
+                          </Typography>
+                        )}
+                      </TableCell>
                       <TableCell align="right">
                         {/* Show converted price in portfolio currency */}
                         <Typography variant="body2">
@@ -448,9 +462,30 @@ const ConsolidatedPortfolioDetails = () => {
                         )}
                       </TableCell>
                       <TableCell align="right">
-                        <Typography fontWeight="medium">
-                          {formatCurrency(asset.total_current_value)}
+                        <Typography variant="body2" fontWeight="medium">
+                          {formatCurrency(asset.total_cost, portfolio?.base_currency)}
                         </Typography>
+                        {asset.security_currency &&
+                         asset.security_currency !== portfolio?.base_currency &&
+                         asset.total_cost_original && (
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            ({formatCurrency(asset.total_cost_original, asset.security_currency)})
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell align="right">
+                        {/* Show total value in portfolio currency */}
+                        <Typography variant="body2" fontWeight="medium">
+                          {formatCurrency(asset.total_current_value, portfolio?.base_currency)}
+                        </Typography>
+                        {/* Show original total value in security currency below if different */}
+                        {asset.security_currency &&
+                         asset.security_currency !== portfolio?.base_currency &&
+                         asset.current_price && (
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            ({formatCurrency(asset.total_quantity * asset.current_price, asset.security_currency)})
+                          </Typography>
+                        )}
                       </TableCell>
                       <TableCell align="right">
                         <Box display="flex" alignItems="center" justifyContent="flex-end">
@@ -484,7 +519,7 @@ const ConsolidatedPortfolioDetails = () => {
 
                     {/* Expanded Row - Transactions */}
                     <TableRow>
-                      <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={6}>
+                      <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={7}>
                         <Collapse in={expandedRows[asset.key]} timeout="auto" unmountOnExit>
                           <Box sx={{ margin: 2 }}>
                             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
@@ -528,7 +563,17 @@ const ConsolidatedPortfolioDetails = () => {
                                     <TableCell align="right">{transaction.quantity}</TableCell>
                                     <TableCell align="right">
                                       {/* Show price in original transaction currency */}
-                                      {formatCurrency(transaction.price, transaction.currency || portfolio?.base_currency)}
+                                      <Typography variant="body2">
+                                        {formatCurrency(transaction.price, transaction.currency || portfolio?.base_currency)}
+                                      </Typography>
+                                      {/* Show converted price if different currency and exchange rate available */}
+                                      {transaction.currency &&
+                                       transaction.currency !== portfolio?.base_currency &&
+                                       transaction.exchange_rate && (
+                                        <Typography variant="caption" display="block" color="text.secondary">
+                                          ({formatCurrency(transaction.price * transaction.exchange_rate, portfolio?.base_currency)})
+                                        </Typography>
+                                      )}
                                     </TableCell>
                                     <TableCell align="right">
                                       {/* Show total in original transaction currency */}
