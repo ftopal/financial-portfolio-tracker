@@ -189,7 +189,12 @@ class TransactionSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        # Similar logic for updates
+        # Store old values for cash transaction update
+        old_exchange_rate = instance.exchange_rate
+        old_base_amount = instance.base_amount
+        old_total_value = instance.total_value
+
+        # Similar logic for updates as in create method
         currency = validated_data.get('currency', instance.currency)
         portfolio = instance.portfolio
         portfolio_currency = portfolio.base_currency or portfolio.currency
@@ -221,7 +226,70 @@ class TransactionSerializer(serializers.ModelSerializer):
                         validated_data['exchange_rate'] = user_base_amount / total_amount
                 # If both provided, use both as-is
 
-        return super().update(instance, validated_data)
+        # Update the transaction
+        updated_instance = super().update(instance, validated_data)
+
+        # CHECK IF WE NEED TO UPDATE THE RELATED CASH TRANSACTION
+        new_base_amount = updated_instance.base_amount or updated_instance.total_value
+
+        # Import here to avoid circular imports
+        from .models import CashTransaction
+
+        # Check if there's a related cash transaction that needs updating
+        try:
+            related_cash_transaction = CashTransaction.objects.get(
+                related_transaction=updated_instance
+            )
+
+            # Calculate the difference in cash amount
+            old_cash_amount = old_base_amount or old_total_value
+            new_cash_amount = new_base_amount
+
+            print(f"DEBUG: Old cash amount: {old_cash_amount}")
+            print(f"DEBUG: New cash amount: {new_cash_amount}")
+
+            if old_cash_amount != new_cash_amount:
+                # Update the cash transaction amount
+                cash_difference = new_cash_amount - old_cash_amount
+
+                if updated_instance.transaction_type == 'BUY':
+                    # For BUY transactions, cash amount is negative (outflow)
+                    new_cash_transaction_amount = -new_cash_amount
+                    cash_balance_adjustment = -cash_difference
+                elif updated_instance.transaction_type == 'SELL':
+                    # For SELL transactions, cash amount is positive (inflow)
+                    new_cash_transaction_amount = new_cash_amount
+                    cash_balance_adjustment = cash_difference
+                elif updated_instance.transaction_type == 'DIVIDEND':
+                    # For DIVIDEND transactions, cash amount is positive (inflow)
+                    new_cash_transaction_amount = new_cash_amount
+                    cash_balance_adjustment = cash_difference
+                else:
+                    # For other transaction types, no cash impact
+                    return updated_instance
+
+                print(
+                    f"DEBUG: Updating cash transaction from {related_cash_transaction.amount} to {new_cash_transaction_amount}")
+                print(f"DEBUG: Cash balance adjustment: {cash_balance_adjustment}")
+
+                # Update the cash transaction amount
+                related_cash_transaction.amount = new_cash_transaction_amount
+                related_cash_transaction.save()
+
+                # Update the cash account balance
+                cash_account = related_cash_transaction.cash_account
+                cash_account.update_balance(cash_balance_adjustment)
+
+                print(f"DEBUG: Updated cash account balance to: {cash_account.balance}")
+
+        except CashTransaction.DoesNotExist:
+            print(f"DEBUG: No related cash transaction found for transaction {updated_instance.id}")
+            pass
+        except Exception as e:
+            print(f"DEBUG: Error updating related cash transaction: {e}")
+            pass
+
+        return updated_instance
 
 
 class HoldingSerializer(serializers.Serializer):

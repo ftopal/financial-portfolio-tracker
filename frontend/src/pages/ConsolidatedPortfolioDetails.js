@@ -32,6 +32,7 @@ import {
   TrendingDown as TrendingDownIcon,
   Delete as DeleteIcon,
   Add as AddIcon,
+  Edit as EditIcon,
   AccountBalance as AccountBalanceIcon,
   ShowChart as ShowChartIcon,
   AttachMoney as AttachMoneyIcon,
@@ -54,6 +55,7 @@ const ConsolidatedPortfolioDetails = () => {
   const [expandedRows, setExpandedRows] = useState({});
   const [selectedSecurity, setSelectedSecurity] = useState(null);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState(null);
 
   const fetchConsolidatedData = useCallback(async () => {
     try {
@@ -114,6 +116,39 @@ const ConsolidatedPortfolioDetails = () => {
     }
   };
 
+  const handleEditTransaction = (transaction, asset) => {
+    // Prepare the transaction data for editing
+    const transactionToEdit = {
+      id: transaction.id,
+      security: {
+        id: transaction.stock_id,
+        symbol: asset.symbol,
+        name: asset.name,
+        current_price: asset.current_price,
+        currency: asset.current_price_currency || transaction.currency
+      },
+      transaction_type: transaction.transaction_type,
+      quantity: transaction.quantity,
+      price: transaction.price,
+      fees: transaction.fees || 0,
+      currency: transaction.currency,
+      transaction_date: transaction.date,
+      notes: transaction.notes || '',
+      exchange_rate: transaction.exchange_rate,
+      split_ratio: transaction.split_ratio || ''
+    };
+
+    setEditingTransaction(transactionToEdit);
+    setSelectedSecurity({
+      id: transaction.stock_id,
+      symbol: asset.symbol,
+      name: asset.name,
+      current_price: asset.current_price,
+      currency: asset.current_price_currency || transaction.currency
+    });
+    setShowTransactionForm(true);
+  };
+
   const handleOpenNewTransactionModal = () => {
     setSelectedSecurity(null);
     setShowTransactionForm(true);
@@ -122,6 +157,7 @@ const ConsolidatedPortfolioDetails = () => {
   const handleTransactionSuccess = () => {
     setShowTransactionForm(false);
     setSelectedSecurity(null);
+    setEditingTransaction(null);
     fetchConsolidatedData();
   };
 
@@ -633,18 +669,47 @@ const ConsolidatedPortfolioDetails = () => {
                                       )}
                                     </TableCell>
                                     <TableCell align="center">
-                                      <Tooltip title="Delete Transaction">
-                                        <IconButton
-                                          size="small"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleDeleteTransaction(transaction.id, asset.name);
-                                          }}
-                                          color="error"
-                                        >
-                                          <DeleteIcon fontSize="small" />
-                                        </IconButton>
-                                      </Tooltip>
+                                      <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+                                        {/* Edit Button */}
+                                        <Tooltip title="Edit Transaction">
+                                          <IconButton
+                                            size="small"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleEditTransaction(transaction, asset);
+                                            }}
+                                            color="primary"
+                                            sx={{
+                                              '&:hover': {
+                                                backgroundColor: 'primary.light',
+                                                color: 'white'
+                                              }
+                                            }}
+                                          >
+                                            <EditIcon fontSize="small" />
+                                          </IconButton>
+                                        </Tooltip>
+
+                                        {/* Delete Button (existing) */}
+                                        <Tooltip title="Delete Transaction">
+                                          <IconButton
+                                            size="small"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleDeleteTransaction(transaction.id, asset.name);
+                                            }}
+                                            color="error"
+                                            sx={{
+                                              '&:hover': {
+                                                backgroundColor: 'error.light',
+                                                color: 'white'
+                                              }
+                                            }}
+                                          >
+                                            <DeleteIcon fontSize="small" />
+                                          </IconButton>
+                                        </Tooltip>
+                                      </Box>
                                     </TableCell>
                                   </TableRow>
                                 ))}
@@ -679,10 +744,13 @@ const ConsolidatedPortfolioDetails = () => {
         onClose={() => {
           setShowTransactionForm(false);
           setSelectedSecurity(null);
+          setEditingTransaction(null); // ADD THIS LINE
         }}
         portfolioId={portfolioId}
         security={selectedSecurity}
+        transaction={editingTransaction} // ADD THIS LINE to pass the transaction for editing
         onSuccess={handleTransactionSuccess}
+        onTransactionSaved={handleTransactionSuccess} // ADD THIS LINE for consistency
         existingHoldings={getHoldingsMap()}
         portfolio={portfolio}
       />

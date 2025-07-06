@@ -82,11 +82,16 @@ const TransactionForm = ({
     try {
       const response = await api.portfolios.get(portfolioId);
       setPortfolioData(response.data);
-      // Set default currency to portfolio's base currency
-      setFormData(prev => ({
-        ...prev,
-        currency: response.data.base_currency || 'USD'
-      }));
+
+      // ONLY set default currency for completely new transactions
+      // Check if we have a transaction being edited
+      if (!transaction && !formData.currency) {
+        console.log('Setting default currency from portfolio');
+        setFormData(prev => ({
+          ...prev,
+          currency: response.data.base_currency || 'USD'
+        }));
+      }
     } catch (err) {
       console.error('Failed to fetch portfolio:', err);
     }
@@ -96,56 +101,105 @@ const TransactionForm = ({
     try {
       const response = await api.portfolios.getHoldings(portfolioId);
       const holdings = {};
-      response.data.forEach(holding => {
-        holdings[holding.security.symbol] = holding.quantity;
-      });
+
+      // Handle different response structures safely
+      const holdingsArray = response?.data?.results || response?.data || [];
+
+      if (Array.isArray(holdingsArray)) {
+        holdingsArray.forEach(holding => {
+          if (holding?.security?.symbol) {
+            holdings[holding.security.symbol] = holding.quantity;
+          }
+        });
+      }
+
       setPortfolioHoldings(holdings);
     } catch (err) {
       console.error('Failed to fetch holdings:', err);
+      setPortfolioHoldings({});
     }
   }, [portfolioId]);
 
   // Initialize form
   useEffect(() => {
     if (open) {
+      console.log('Form opened with transaction:', transaction);
+      console.log('Transaction currency:', transaction?.currency);
+
+      // Fetch data first
       fetchPortfolio();
       fetchPortfolioHoldings();
 
-      if (security) {
-        setSelectedSecurity(security);
-        // Auto-set currency to security's currency when a security is pre-selected
-        setFormData(prev => ({
-          ...prev,
-          currency: security.currency || prev.currency
-        }));
-      }
-
+      // Handle editing existing transaction FIRST (highest priority)
       if (transaction) {
-        // Editing existing transaction
+        console.log('Setting form data for transaction edit');
         setFormData({
           transaction_type: transaction.transaction_type,
           quantity: transaction.quantity.toString(),
           price: transaction.price.toString(),
-          currency: transaction.currency || 'USD',
+          currency: transaction.currency || 'USD', // This should be USD
           transaction_date: transaction.transaction_date.split('T')[0],
           fees: transaction.fees?.toString() || '0',
           notes: transaction.notes || '',
           split_ratio: transaction.split_ratio || ''
         });
+
+        if (transaction.exchange_rate) {
+          setExchangeRateField(transaction.exchange_rate.toString());
+          setIsExchangeRateManual(true);
+        }
+
         setSelectedSecurity(transaction.security);
+        return; // IMPORTANT: Return early to prevent other logic from running
+      }
+
+      // Handle pre-selected security (for new transactions only)
+      if (security && !transaction) {
+        setSelectedSecurity(security);
+        setFormData(prev => ({
+          ...prev,
+          currency: security.currency || prev.currency
+        }));
+        return; // Return early
+      }
+
+      // Handle new transaction (reset form) - only if no transaction and no security
+      if (!transaction && !security) {
+        setFormData(prev => ({
+          ...prev,
+          transaction_type: 'BUY',
+          quantity: '',
+          price: '',
+          transaction_date: new Date().toISOString().split('T')[0],
+          fees: '0',
+          notes: '',
+          split_ratio: ''
+        }));
+
+        setExchangeRateField('');
+        setBaseAmountField('');
+        setIsExchangeRateManual(false);
+        setIsBaseAmountManual(false);
+        setSelectedSecurity(null);
       }
     }
-  }, [open, security, transaction, fetchPortfolio, fetchPortfolioHoldings]);
+  }, [open, transaction, security]);
+
 
   // Auto-set currency when security is selected
   useEffect(() => {
-    if (selectedSecurity && selectedSecurity.currency) {
+    // Only auto-set currency from security if:
+    // 1. NOT editing an existing transaction
+    // 2. Form is open
+    // 3. No existing currency is set
+    if (selectedSecurity && selectedSecurity.currency && !transaction && open && !formData.currency) {
+      console.log('Auto-setting currency from security:', selectedSecurity.currency);
       setFormData(prev => ({
         ...prev,
         currency: selectedSecurity.currency
       }));
     }
-  }, [selectedSecurity]);
+  }, [selectedSecurity, transaction, open]);
 
   // Calculate exchange rate when currency or amount changes
     const fetchExchangeRate = useCallback(async () => {
@@ -188,7 +242,7 @@ const TransactionForm = ({
 
         // Fetch exchange rate for the transaction date
         const response = await currencyAPI.convert({
-          amount: 1, // Get rate for 1 unit
+          amount: 1,
           from_currency: formData.currency,
           to_currency: portfolioCurrency,
           date: formData.transaction_date
@@ -218,12 +272,10 @@ const TransactionForm = ({
 
         setAutoBaseAmount(calculatedBaseAmount);
 
-        // Set base amount field only if user hasn't manually modified it
         if (!isBaseAmountManual) {
           setBaseAmountField(calculatedBaseAmount.toFixed(2));
         }
 
-        // Update other existing calculations
         setConvertedAmount(amount * currentRate);
         setConvertedAmountWithFees(calculatedBaseAmount);
 
@@ -237,14 +289,26 @@ const TransactionForm = ({
         setAutoBaseAmount(null);
         setBaseAmountField('');
       }
-    }, [formData.currency, formData.quantity, formData.price, formData.fees, formData.transaction_date, formData.transaction_type, portfolio, portfolioData, exchangeRateField, isExchangeRateManual, isBaseAmountManual]);
+    }, [
+      formData.currency,
+      formData.quantity,
+      formData.price,
+      formData.fees,
+      formData.transaction_date,
+      formData.transaction_type,
+      portfolioData,
+      portfolio,
+      exchangeRateField,
+      isExchangeRateManual,
+      isBaseAmountManual
+    ]);
 
   // Trigger exchange rate calculation
   useEffect(() => {
     const currentPortfolio = portfolioData || portfolio;
     const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
 
-    if (currentPortfolio && formData.currency !== portfolioCurrency && formData.price && formData.quantity) {
+    if (currentPortfolio && formData.currency !== portfolioCurrency && formData.price && formData.quantity && open) {
       fetchExchangeRate();
     } else if (formData.currency === portfolioCurrency) {
       setExchangeRate(1);
@@ -255,7 +319,16 @@ const TransactionForm = ({
       setConvertedAmount(null);
       setConvertedAmountWithFees(null);
     }
-  }, [formData.currency, formData.price, formData.quantity, formData.fees, portfolioData, portfolio, fetchExchangeRate]);
+  }, [
+    formData.currency,
+    formData.price,
+    formData.quantity,
+    formData.fees,
+    formData.transaction_date,
+    portfolioData,
+    portfolio,
+    open
+  ]);
 
   // Security search functionality
   const searchSecurities = React.useMemo(
@@ -648,7 +721,17 @@ const TransactionForm = ({
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 2 }}>
             <CurrencySelector
               value={formData.currency}
-              onChange={(value) => setFormData({ ...formData, currency: value })}
+              onChange={(value) => {
+                // Allow currency changes for new transactions, but be careful with edited transactions
+                if (!transaction || (transaction && window.confirm('Changing currency will reset exchange rate calculations. Continue?'))) {
+                  setFormData({ ...formData, currency: value });
+                  // Reset exchange rate fields when currency changes
+                  setExchangeRateField('');
+                  setBaseAmountField('');
+                  setIsExchangeRateManual(false);
+                  setIsBaseAmountManual(false);
+                }
+              }}
               fullWidth
               label="Transaction Currency"
               helperText={
