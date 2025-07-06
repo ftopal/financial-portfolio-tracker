@@ -52,12 +52,17 @@ class Portfolio(models.Model):
         """Calculate current holdings based on transactions - with currency conversion"""
         holdings = {}
         portfolio_currency = self.base_currency or self.currency
+        processed_transactions = set()
 
         transactions = self.transactions.filter(
             transaction_type__in=['BUY', 'SELL', 'DIVIDEND', 'SPLIT']
         ).select_related('security').order_by('transaction_date')
 
         for transaction in transactions:
+            if transaction.id in processed_transactions:
+                continue
+            processed_transactions.add(transaction.id)
+
             security_id = transaction.security.id
 
             if security_id not in holdings:
@@ -123,15 +128,34 @@ class Portfolio(models.Model):
 
 
             elif transaction.transaction_type == 'DIVIDEND':
-                # Calculate actual dividend amount
-                dividend_amount = transaction.base_amount or transaction.total_value
+                # Calculate actual dividend amount in portfolio base currency
+                if transaction.base_amount:
+                    dividend_amount_base_currency = transaction.base_amount
+                else:
+                    dividend_amount_base_currency = transaction.total_value
 
-                holdings[security_id]['total_dividends'] += dividend_amount
-                # Dividends REDUCE the effective cost basis
-                holdings[security_id]['net_cash_invested'] -= dividend_amount
+                # Debug logging
+                print(f"DIVIDEND DEBUG: Symbol={transaction.security.symbol}")
+                print(f"  Dividend amount (base currency): {dividend_amount_base_currency}")
+                print(f"  Total cost before dividend: {holdings[security_id]['total_cost_base_currency']}")
 
-                # Update total cost basis (cost minus dividends received)
-                holdings[security_id]['total_cost_base_currency'] -= dividend_amount
+                holdings[security_id]['total_dividends'] += dividend_amount_base_currency
+
+                # ✅ CRITICAL FIX: Dividends reduce the effective cost basis
+                holdings[security_id]['total_cost_base_currency'] -= dividend_amount_base_currency
+                holdings[security_id]['net_cash_invested'] -= dividend_amount_base_currency
+
+                # Also reduce the original currency cost if we track it separately
+                if transaction.dividend_per_share and transaction.quantity:
+                    dividend_amount_original = transaction.dividend_per_share * transaction.quantity
+                    holdings[security_id]['total_cost'] -= dividend_amount_original
+
+                print(f"  Total cost after dividend: {holdings[security_id]['total_cost_base_currency']}")
+                print(f"  Quantity: {holdings[security_id]['quantity']}")
+
+                if holdings[security_id]['quantity'] > 0:
+                    new_avg = holdings[security_id]['total_cost_base_currency'] / holdings[security_id]['quantity']
+                    print(f"  New avg cost: {new_avg}")
 
         # Calculate current metrics for each holding
         for security_id, data in holdings.items():
