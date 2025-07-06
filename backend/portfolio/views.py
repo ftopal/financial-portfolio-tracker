@@ -898,6 +898,16 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         return Response({'error': 'Portfolio not found'}, status=404)
 
     holdings = portfolio.get_holdings()
+
+    # DEBUG: Let's see what get_holdings() actually calculated
+    for security_id, data in holdings.items():
+        if data['security'].symbol == 'GOOG':
+            print(f"DEBUG: get_holdings() calculated for GOOG:")
+            print(f"  total_cost_base_currency: {data.get('total_cost_base_currency', 'NOT_FOUND')}")
+            print(f"  avg_cost_base_currency: {data.get('avg_cost_base_currency', 'NOT_FOUND')}")
+            print(f"  quantity: {data.get('quantity', 'NOT_FOUND')}")
+            print(f"  total_dividends: {data.get('total_dividends', 'NOT_FOUND')}")
+
     consolidated_assets = []
     portfolio_currency = portfolio.base_currency or portfolio.currency
 
@@ -909,15 +919,17 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         portfolio_base_currency = portfolio.base_currency or portfolio.currency
         security_currency = data['security'].currency
 
-        # Get all transactions for this security
+        # ✅ USE the correct values from get_holdings() (which already accounts for dividends)
+        total_cost_portfolio_currency = data.get('total_cost_base_currency', Decimal('0'))
+        avg_cost_portfolio_currency = data.get('avg_cost_base_currency', Decimal('0'))
+
+        # For security currency, calculate from original transactions (without dividend adjustments)
         security_transactions = Transaction.objects.filter(
             portfolio=portfolio,
             security=data['security'],
             transaction_type__in=['BUY', 'SELL']
         ).order_by('transaction_date')
 
-        # Calculate weighted average costs
-        total_cost_portfolio_currency = Decimal('0')
         total_cost_security_currency = Decimal('0')
         total_quantity = Decimal('0')
 
@@ -925,39 +937,21 @@ def portfolio_holdings_consolidated(request, portfolio_id):
             transaction_cost = (transaction.quantity * transaction.price) + (transaction.fees or 0)
 
             if transaction.transaction_type == 'BUY':
-                # Add to totals
                 total_quantity += transaction.quantity
                 total_cost_security_currency += transaction_cost
-
-                # Convert to portfolio currency using historical rate
-                if transaction.exchange_rate:
-                    total_cost_portfolio_currency += transaction_cost * transaction.exchange_rate
-                else:
-                    # Fallback: use current rate if historical not available
-                    current_rate = CurrencyService.get_exchange_rate(
-                        security_currency, portfolio_base_currency
-                    )
-                    total_cost_portfolio_currency += transaction_cost * (current_rate or 1)
-
             elif transaction.transaction_type == 'SELL':
                 # Subtract from totals (FIFO or weighted average)
                 sell_quantity = transaction.quantity
                 total_quantity -= sell_quantity
 
-                # Calculate proportional cost reduction
                 if total_quantity > 0:
-                    cost_per_share_security = total_cost_security_currency / (total_quantity + sell_quantity)
-                    cost_per_share_portfolio = total_cost_portfolio_currency / (total_quantity + sell_quantity)
+                    cost_per_share = total_cost_security_currency / (total_quantity + sell_quantity)
+                    total_cost_security_currency -= cost_per_share * sell_quantity
 
-                    total_cost_security_currency -= cost_per_share_security * sell_quantity
-                    total_cost_portfolio_currency -= cost_per_share_portfolio * sell_quantity
-
-        # Calculate accurate average costs
+        # Calculate average in security currency
         if total_quantity > 0:
-            avg_cost_portfolio_currency = total_cost_portfolio_currency / total_quantity
             avg_cost_security_currency = total_cost_security_currency / total_quantity
         else:
-            avg_cost_portfolio_currency = Decimal('0')
             avg_cost_security_currency = Decimal('0')
 
         for transaction in data['transactions']:
