@@ -121,13 +121,17 @@ class Portfolio(models.Model):
                         lot['remaining'] -= sold_from_lot
                         remaining_to_sell -= sold_from_lot
 
+
             elif transaction.transaction_type == 'DIVIDEND':
-                if transaction.base_amount:
-                    holdings[security_id]['total_dividends'] += transaction.base_amount
-                    holdings[security_id]['net_cash_invested'] -= transaction.base_amount
-                else:
-                    holdings[security_id]['total_dividends'] += transaction.total_value
-                    holdings[security_id]['net_cash_invested'] -= transaction.total_value
+                # Calculate actual dividend amount
+                dividend_amount = transaction.base_amount or transaction.total_value
+
+                holdings[security_id]['total_dividends'] += dividend_amount
+                # Dividends REDUCE the effective cost basis
+                holdings[security_id]['net_cash_invested'] -= dividend_amount
+
+                # Update total cost basis (cost minus dividends received)
+                holdings[security_id]['total_cost_base_currency'] -= dividend_amount
 
         # Calculate current metrics for each holding
         for security_id, data in holdings.items():

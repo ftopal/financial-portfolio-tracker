@@ -64,6 +64,7 @@ const TransactionForm = ({
   const [searchInput, setSearchInput] = useState('');
   const [portfolioHoldings, setPortfolioHoldings] = useState({});
 
+  // Manual exchange rate and base amount states
   const [exchangeRateField, setExchangeRateField] = useState(''); // Manual exchange rate input
   const [baseAmountField, setBaseAmountField] = useState(''); // Manual base amount input
   const [autoExchangeRate, setAutoExchangeRate] = useState(null); // Fetched exchange rate
@@ -95,49 +96,48 @@ const TransactionForm = ({
     } catch (err) {
       console.error('Failed to fetch portfolio:', err);
     }
-  }, [portfolioId]);
+  }, [portfolioId, transaction]);
 
   const fetchPortfolioHoldings = useCallback(async () => {
     try {
       const response = await api.portfolios.getHoldings(portfolioId);
       const holdings = {};
-
-      // Handle different response structures safely
-      const holdingsArray = response?.data?.results || response?.data || [];
-
-      if (Array.isArray(holdingsArray)) {
-        holdingsArray.forEach(holding => {
-          if (holding?.security?.symbol) {
-            holdings[holding.security.symbol] = holding.quantity;
-          }
+      if (response.data) {
+        // Create a map of symbol to quantity for easy lookup
+        Object.values(response.data).forEach(holding => {
+          holdings[holding.security.symbol] = holding.quantity;
         });
       }
-
       setPortfolioHoldings(holdings);
     } catch (err) {
       console.error('Failed to fetch holdings:', err);
-      setPortfolioHoldings({});
     }
   }, [portfolioId]);
 
-  // Initialize form
+  // Initialize form when dialog opens
   useEffect(() => {
     if (open) {
-      console.log('Form opened with transaction:', transaction);
-      console.log('Transaction currency:', transaction?.currency);
+      // Use provided portfolio or fetch it
+      if (portfolio) {
+        setPortfolioData(portfolio);
+      } else {
+        fetchPortfolio();
+      }
 
-      // Fetch data first
-      fetchPortfolio();
-      fetchPortfolioHoldings();
+      // Only fetch holdings if not provided via props
+      if (!existingHoldings) {
+        fetchPortfolioHoldings();
+      } else {
+        setPortfolioHoldings(existingHoldings);
+      }
 
-      // Handle editing existing transaction FIRST (highest priority)
+      // Handle editing existing transaction
       if (transaction) {
-        console.log('Setting form data for transaction edit');
         setFormData({
           transaction_type: transaction.transaction_type,
           quantity: transaction.quantity.toString(),
           price: transaction.price.toString(),
-          currency: transaction.currency || 'USD', // This should be USD
+          currency: transaction.currency || transaction.security.currency,
           transaction_date: transaction.transaction_date.split('T')[0],
           fees: transaction.fees?.toString() || '0',
           notes: transaction.notes || '',
@@ -183,8 +183,7 @@ const TransactionForm = ({
         setSelectedSecurity(null);
       }
     }
-  }, [open, transaction, security]);
-
+  }, [open, transaction, security, portfolio, fetchPortfolio, fetchPortfolioHoldings, existingHoldings]);
 
   // Auto-set currency when security is selected
   useEffect(() => {
@@ -201,136 +200,19 @@ const TransactionForm = ({
     }
   }, [selectedSecurity, transaction, open]);
 
-  // Calculate exchange rate when currency or amount changes
-    const fetchExchangeRate = useCallback(async () => {
-      try {
-        const currentPortfolio = portfolioData || portfolio;
-        const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
-
-        if (formData.currency === portfolioCurrency) {
-          setExchangeRate(1);
-          setAutoExchangeRate(1);
-          setExchangeRateField('1.0000');
-          setConvertedAmount(null);
-          setConvertedAmountWithFees(null);
-          setAutoBaseAmount(null);
-          setBaseAmountField('');
-          return;
-        }
-
-        // Calculate amount based on transaction type with proper decimal handling
-        const quantity = parseFloat(formData.quantity || 0);
-        const price = parseFloat(formData.price || 0);
-        const fees = parseFloat(formData.fees || 0);
-
-        // Round to 8 decimal places to prevent precision issues
-        const amount = formData.transaction_type === 'DIVIDEND'
-          ? Math.round(price * 100000000) / 100000000
-          : Math.round((price * quantity) * 100000000) / 100000000;
-
-        // Don't proceed if amount is 0 or invalid
-        if (!amount || amount === 0 || isNaN(amount)) {
-          setExchangeRate(null);
-          setAutoExchangeRate(null);
-          setExchangeRateField('');
-          setConvertedAmount(null);
-          setConvertedAmountWithFees(null);
-          setAutoBaseAmount(null);
-          setBaseAmountField('');
-          return;
-        }
-
-        // Fetch exchange rate for the transaction date
-        const response = await currencyAPI.convert({
-          amount: 1,
-          from_currency: formData.currency,
-          to_currency: portfolioCurrency,
-          date: formData.transaction_date
-        });
-
-        const rate = response.data.converted_amount;
-        setExchangeRate(rate);
-        setAutoExchangeRate(rate);
-
-        // Set exchange rate field only if user hasn't manually modified it
-        if (!isExchangeRateManual) {
-          setExchangeRateField(rate.toFixed(4));
-        }
-
-        // Calculate base amount
-        let totalInTransactionCurrency;
-        if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
-          totalInTransactionCurrency = amount + fees;
-        } else if (formData.transaction_type === 'SELL') {
-          totalInTransactionCurrency = amount - fees;
-        } else {
-          totalInTransactionCurrency = amount;
-        }
-
-        const currentRate = isExchangeRateManual ? parseFloat(exchangeRateField) : rate;
-        const calculatedBaseAmount = totalInTransactionCurrency * currentRate;
-
-        setAutoBaseAmount(calculatedBaseAmount);
-
-        if (!isBaseAmountManual) {
-          setBaseAmountField(calculatedBaseAmount.toFixed(2));
-        }
-
-        setConvertedAmount(amount * currentRate);
-        setConvertedAmountWithFees(calculatedBaseAmount);
-
-      } catch (error) {
-        console.error('Failed to fetch exchange rate:', error);
-        setExchangeRate(null);
-        setAutoExchangeRate(null);
-        setExchangeRateField('');
-        setConvertedAmount(null);
-        setConvertedAmountWithFees(null);
-        setAutoBaseAmount(null);
-        setBaseAmountField('');
-      }
-    }, [
-      formData.currency,
-      formData.quantity,
-      formData.price,
-      formData.fees,
-      formData.transaction_date,
-      formData.transaction_type,
-      portfolioData,
-      portfolio,
-      exchangeRateField,
-      isExchangeRateManual,
-      isBaseAmountManual
-    ]);
-
-  // Trigger exchange rate calculation
+  // Also update the form data when transaction type changes to DIVIDEND
   useEffect(() => {
-    const currentPortfolio = portfolioData || portfolio;
-    const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
-
-    if (currentPortfolio && formData.currency !== portfolioCurrency && formData.price && formData.quantity && open) {
-      fetchExchangeRate();
-    } else if (formData.currency === portfolioCurrency) {
-      setExchangeRate(1);
-      setConvertedAmount(null);
-      setConvertedAmountWithFees(null);
-    } else {
-      setExchangeRate(null);
-      setConvertedAmount(null);
-      setConvertedAmountWithFees(null);
+    if (formData.transaction_type === 'DIVIDEND' && selectedSecurity) {
+      const holdingQuantity = portfolioHoldings[selectedSecurity.symbol] || selectedSecurity.total_quantity || 0;
+      if (holdingQuantity > 0 && !formData.quantity) {
+        setFormData(prev => ({
+          ...prev,
+          quantity: holdingQuantity.toString()
+        }));
+      }
     }
-  }, [
-    formData.currency,
-    formData.price,
-    formData.quantity,
-    formData.fees,
-    formData.transaction_date,
-    portfolioData,
-    portfolio,
-    open
-  ]);
+  }, [formData.transaction_type, formData.quantity, selectedSecurity, portfolioHoldings]);
 
-  // Security search functionality
   const searchSecurities = React.useMemo(
     () =>
       debounce(async (query) => {
@@ -372,11 +254,10 @@ const TransactionForm = ({
         const imported = response.data.security;
         setSelectedSecurity(imported);
         setSearchOptions([imported]);
-        // Set currency to the imported security's currency
         setFormData(prev => ({
           ...prev,
           price: imported.current_price?.toString() || '',
-          currency: imported.currency || 'USD'
+          currency: imported.currency || 'USD' // Auto-set currency
         }));
         setSearchOpen(false);
         setError('');
@@ -388,12 +269,142 @@ const TransactionForm = ({
     }
   };
 
+  // Calculate exchange rate when currency or amount changes
+  const fetchExchangeRate = useCallback(async () => {
+    try {
+      const currentPortfolio = portfolioData || portfolio;
+      const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
+      if (formData.currency === portfolioCurrency) {
+        setExchangeRate(1);
+        setAutoExchangeRate(1);
+        setExchangeRateField('1.0000');
+        setConvertedAmount(null);
+        setConvertedAmountWithFees(null);
+        setAutoBaseAmount(null);
+        setBaseAmountField('');
+        return;
+      }
+
+      // Calculate amount based on transaction type with proper decimal handling
+      const quantity = parseFloat(formData.quantity || 0);
+      const price = parseFloat(formData.price || 0);
+      const fees = parseFloat(formData.fees || 0);
+
+      // Round to 8 decimal places to prevent precision issues
+      const amount = formData.transaction_type === 'DIVIDEND'
+        ? Math.round(price * 100000000) / 100000000
+        : Math.round((price * quantity) * 100000000) / 100000000;
+
+      // Don't proceed if amount is 0 or invalid
+      if (!amount || amount === 0 || isNaN(amount)) {
+        setExchangeRate(null);
+        setAutoExchangeRate(null);
+        setExchangeRateField('');
+        setConvertedAmount(null);
+        setConvertedAmountWithFees(null);
+        setAutoBaseAmount(null);
+        setBaseAmountField('');
+        return;
+      }
+
+      // Fetch exchange rate for the transaction date
+      const response = await currencyAPI.convert({
+        amount: 1,
+        from_currency: formData.currency,
+        to_currency: portfolioCurrency,
+        date: formData.transaction_date
+      });
+
+      const rate = response.data.converted_amount;
+      setExchangeRate(rate);
+      setAutoExchangeRate(rate);
+
+      // Set exchange rate field only if user hasn't manually modified it
+      if (!isExchangeRateManual) {
+        setExchangeRateField(rate.toFixed(4));
+      }
+
+      // Calculate base amount
+      let totalInTransactionCurrency;
+      if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
+        totalInTransactionCurrency = amount + fees;
+      } else if (formData.transaction_type === 'SELL') {
+        totalInTransactionCurrency = amount - fees;
+      } else {
+        totalInTransactionCurrency = amount;
+      }
+
+      const currentRate = isExchangeRateManual ? parseFloat(exchangeRateField) : rate;
+      const calculatedBaseAmount = totalInTransactionCurrency * currentRate;
+
+      setAutoBaseAmount(calculatedBaseAmount);
+
+      if (!isBaseAmountManual) {
+        setBaseAmountField(calculatedBaseAmount.toFixed(2));
+      }
+
+      setConvertedAmount(amount * currentRate);
+      setConvertedAmountWithFees(calculatedBaseAmount);
+
+    } catch (error) {
+      console.error('Failed to fetch exchange rate:', error);
+      setExchangeRate(null);
+      setAutoExchangeRate(null);
+      setExchangeRateField('');
+      setConvertedAmount(null);
+      setConvertedAmountWithFees(null);
+      setAutoBaseAmount(null);
+      setBaseAmountField('');
+    }
+  }, [
+    formData.currency,
+    formData.quantity,
+    formData.price,
+    formData.fees,
+    formData.transaction_date,
+    formData.transaction_type,
+    portfolioData,
+    portfolio,
+    exchangeRateField,
+    isExchangeRateManual,
+    isBaseAmountManual
+  ]);
+
+  // Trigger exchange rate calculation
+  useEffect(() => {
+    const currentPortfolio = portfolioData || portfolio;
+    const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
+    if (currentPortfolio && formData.currency !== portfolioCurrency && formData.price && formData.quantity && open) {
+      fetchExchangeRate();
+    } else if (formData.currency === portfolioCurrency) {
+      setExchangeRate(1);
+      setConvertedAmount(null);
+      setConvertedAmountWithFees(null);
+    } else {
+      setExchangeRate(null);
+      setConvertedAmount(null);
+      setConvertedAmountWithFees(null);
+    }
+  }, [
+    formData.currency,
+    formData.price,
+    formData.quantity,
+    formData.fees,
+    formData.transaction_date,
+    portfolioData,
+    portfolio,
+    open,
+    fetchExchangeRate
+  ]);
+
   const handleExchangeRateChange = (event) => {
     const value = event.target.value;
     setExchangeRateField(value);
     setIsExchangeRateManual(true);
 
-    // Recalculate base amount with new rate
+    // Recalculate base amount when exchange rate changes
     if (value && !isNaN(parseFloat(value))) {
       const quantity = parseFloat(formData.quantity || 0);
       const price = parseFloat(formData.price || 0);
@@ -429,6 +440,39 @@ const TransactionForm = ({
     }
   };
 
+  // Auto-calculate additional shares when split ratio changes
+  useEffect(() => {
+    if (formData.transaction_type === 'SPLIT' && formData.split_ratio && selectedSecurity) {
+      try {
+        // Parse the split ratio (e.g., "2:1" means 2 new shares for every 1 old share)
+        const [newShares, oldShares] = formData.split_ratio.split(':').map(Number);
+
+        if (!isNaN(newShares) && !isNaN(oldShares) && oldShares > 0) {
+          // Get current holdings for this security
+          const currentHolding = portfolioHoldings[selectedSecurity.symbol] || 0;
+
+          if (currentHolding > 0) {
+            // Calculate total shares after split
+            const totalSharesAfterSplit = (currentHolding * newShares) / oldShares;
+            // Additional shares = total after split - current holdings
+            const additionalShares = totalSharesAfterSplit - currentHolding;
+
+            // Only update if the calculated value is different from current value
+            // This prevents overwriting manual edits unless the ratio changes
+            if (additionalShares >= 0 && additionalShares !== parseFloat(formData.quantity)) {
+              setFormData(prev => ({
+                ...prev,
+                quantity: additionalShares.toFixed(8) // Use 8 decimal places for precision
+              }));
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error calculating split shares:', error);
+      }
+    }
+  }, [formData.split_ratio, formData.transaction_type, selectedSecurity, portfolioHoldings]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -462,7 +506,7 @@ const TransactionForm = ({
 
         // Handle dividend per share for DIVIDEND transactions
         ...(formData.transaction_type === 'DIVIDEND' && {
-          dividend_per_share: parseFloat(formData.price)
+          dividend_per_share: parseFloat(formData.price) / parseFloat(formData.quantity)  // ✅ CORRECT: Calculate per-share amount
         })
       };
 
@@ -567,10 +611,17 @@ const TransactionForm = ({
                 onChange={(event, newValue) => {
                   setSelectedSecurity(newValue);
                   if (newValue) {
+                    // Check if we have holdings for this security
+                    const holdingQuantity = portfolioHoldings[newValue.symbol] || 0;
+
                     setFormData(prev => ({
                       ...prev,
                       price: newValue.current_price?.toString() || '',
-                      currency: newValue.currency || 'USD' // Auto-set currency
+                      currency: newValue.currency || 'USD', // Auto-set currency
+                      // Auto-fill quantity for dividends
+                      quantity: prev.transaction_type === 'DIVIDEND' && holdingQuantity > 0
+                        ? holdingQuantity.toString()
+                        : prev.quantity
                     }));
                   }
                 }}
@@ -611,27 +662,29 @@ const TransactionForm = ({
                   />
                 )}
                 noOptionsText={
-                  searchInput.length >= 2 ? (
-                    <Box sx={{ p: 2 }}>
-                      <Typography variant="body2" gutterBottom>
-                        No results found for "{searchInput}"
+                  <Box sx={{ p: 2 }}>
+                    {searchInput.length >= 2 ? (
+                      <>
+                        <Typography variant="body2" gutterBottom>
+                          No results found for "{searchInput}"
+                        </Typography>
+                        <Button
+                          variant="contained"
+                          startIcon={<TrendingUp />}
+                          onClick={handleImportFromYahoo}
+                          disabled={searchLoading}
+                          fullWidth
+                          sx={{ mt: 1 }}
+                        >
+                          Import {searchInput.toUpperCase()} from Yahoo Finance
+                        </Button>
+                      </>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        Type at least 2 characters to search
                       </Typography>
-                      <Button
-                        variant="contained"
-                        startIcon={<TrendingUp />}
-                        onClick={handleImportFromYahoo}
-                        disabled={searchLoading}
-                        fullWidth
-                        sx={{ mt: 1 }}
-                      >
-                        Import {searchInput.toUpperCase()} from Yahoo Finance
-                      </Button>
-                    </Box>
-                  ) : (
-                    <Typography variant="body2" color="text.secondary">
-                      Type at least 2 characters to search
-                    </Typography>
-                  )
+                    )}
+                  </Box>
                 }
                 PaperComponent={(props) => (
                   <Paper {...props} elevation={8} />
@@ -667,6 +720,11 @@ const TransactionForm = ({
                   setFormData(prev => ({
                     ...prev,
                     transaction_type: newType,
+                    // Auto-fill quantity when switching to DIVIDEND
+                    quantity: newType === 'DIVIDEND' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
+                      ? portfolioHoldings[selectedSecurity.symbol].toString()
+                      : prev.quantity,
+                    // Clear price for splits as they don't have monetary value
                     price: newType === 'SPLIT' ? '0' : prev.price,
                     fees: newType === 'SPLIT' ? '0' : prev.fees
                   }));
@@ -693,26 +751,83 @@ const TransactionForm = ({
 
           {/* Quantity and Price */}
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 2 }}>
+            {formData.transaction_type === 'SPLIT' && (
+              <TextField
+                type="text"
+                label="Split Ratio (e.g., 2:1)"
+                value={formData.split_ratio || ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Allow only numbers, colons, and spaces
+                  if (/^[\d\s:]*$/.test(value)) {
+                    setFormData({ ...formData, split_ratio: value.replace(/\s/g, '') });
+                  }
+                }}
+                fullWidth
+                required
+                helperText={
+                  selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
+                    ? `Format: new:old (e.g., 2:1). You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares.`
+                    : "Format: new:old (e.g., 2:1 means each share becomes 2 shares)"
+                }
+                placeholder="2:1"
+                error={formData.split_ratio && !/^\d+:\d+$/.test(formData.split_ratio)}
+              />
+            )}
+
             <TextField
               type="number"
-              label="Quantity"
+              label={
+                formData.transaction_type === 'DIVIDEND' ? 'Number of Shares' :
+                formData.transaction_type === 'SPLIT' ? 'Additional Shares Received' :
+                'Quantity'
+              }
               value={formData.quantity}
               onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
               inputProps={{ step: "0.00000001", min: "0" }}
               fullWidth
               required
+              helperText={
+                formData.transaction_type === 'DIVIDEND' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
+                  ? `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares`
+                  : formData.transaction_type === 'SPLIT' && selectedSecurity && portfolioHoldings[selectedSecurity.symbol]
+                  ? formData.split_ratio && /^\d+:\d+$/.test(formData.split_ratio)
+                    ? '✓ Auto-calculated from split ratio. You can edit if needed.'
+                    : `You currently own ${portfolioHoldings[selectedSecurity.symbol]} shares. Enter split ratio above to auto-calculate.`
+                  : ''
+              }
+              // Add visual indicator that it's auto-calculated
+              InputProps={formData.transaction_type === 'SPLIT' && formData.split_ratio ? {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Tooltip title="Auto-calculated from split ratio. You can still edit this value.">
+                      <InfoIcon color="action" fontSize="small" />
+                    </Tooltip>
+                  </InputAdornment>
+                ),
+              } : undefined}
             />
 
             {formData.transaction_type !== 'SPLIT' && (
               <TextField
                 type="number"
-                label={`Price per Unit (${formData.currency})`}
+                label={`${formData.transaction_type === 'DIVIDEND' ? 'Total Dividend Amount' : 'Price per Unit'} (${formData.currency})`}
                 value={formData.price}
                 onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                 inputProps={{ step: "0.00000001", min: "0" }}
                 fullWidth
                 required
-                helperText={`Enter price in ${formData.currency}`}
+                helperText={
+                  formData.transaction_type === 'DIVIDEND'
+                    ? formData.quantity && formData.price
+                      ? <span>Dividend per share: <CurrencyDisplay
+                          amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
+                          currency={formData.currency}
+                          showCode={false}
+                        /></span>
+                      : 'Enter the total dividend amount received'
+                    : `Enter price in ${formData.currency}`
+                }
               />
             )}
           </Box>
@@ -753,7 +868,7 @@ const TransactionForm = ({
             )}
           </Box>
 
-          {/* Exchange Rate Field - NEW (separate row) */}
+          {/* Exchange Rate Field - Manual override */}
           {formData.currency !== portfolioCurrency && (
             <TextField
               type="number"
@@ -767,7 +882,7 @@ const TransactionForm = ({
             />
           )}
 
-          {/* Total Cost in Portfolio Currency Field - NEW (separate row) */}
+          {/* Total Cost in Portfolio Currency Field - Manual override */}
           {formData.currency !== portfolioCurrency && formData.transaction_type !== 'SPLIT' && (
             <TextField
               type="number"
@@ -797,7 +912,45 @@ const TransactionForm = ({
               Transaction Summary
             </Typography>
 
-            {formData.transaction_type !== 'SPLIT' && (
+            {formData.transaction_type === 'SPLIT' ? (
+              <>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="body2">Split Ratio:</Typography>
+                  <Typography variant="body2" fontWeight="bold">
+                    {formData.split_ratio || 'Not specified'}
+                  </Typography>
+                </Box>
+
+                {selectedSecurity && portfolioHoldings[selectedSecurity.symbol] > 0 && (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="body2">Current Shares:</Typography>
+                      <Typography variant="body2">
+                        {portfolioHoldings[selectedSecurity.symbol]}
+                      </Typography>
+                    </Box>
+
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="body2">Additional Shares:</Typography>
+                      <Typography variant="body2" fontWeight="bold">
+                        +{formData.quantity || 0}
+                      </Typography>
+                    </Box>
+
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
+                      <Typography variant="body2" fontWeight="bold">Total After Split:</Typography>
+                      <Typography variant="body2" fontWeight="bold" color="primary">
+                        {parseFloat(portfolioHoldings[selectedSecurity.symbol] || 0) + parseFloat(formData.quantity || 0)}
+                      </Typography>
+                    </Box>
+                  </>
+                )}
+
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  No cash impact for stock splits
+                </Typography>
+              </>
+            ) : (
               <>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography variant="body2">Subtotal:</Typography>
@@ -807,6 +960,17 @@ const TransactionForm = ({
                     showCode={true}
                   />
                 </Box>
+
+                {formData.transaction_type === 'DIVIDEND' && formData.quantity && formData.price && (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="body2">Dividend per share:</Typography>
+                    <CurrencyDisplay
+                      amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
+                      currency={formData.currency}
+                      showCode={true}
+                    />
+                  </Box>
+                )}
 
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography variant="body2">Fees:</Typography>

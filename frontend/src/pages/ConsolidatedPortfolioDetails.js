@@ -598,40 +598,85 @@ const ConsolidatedPortfolioDetails = () => {
                                     </TableCell>
                                     <TableCell align="right">{transaction.quantity}</TableCell>
                                     <TableCell align="right">
-                                      {/* Show price in original transaction currency */}
+                                      {/* Show price - SPECIAL HANDLING FOR DIVIDENDS */}
                                       <Typography variant="body2">
-                                        {formatCurrency(transaction.price, transaction.currency || portfolio?.base_currency)}
+                                        {transaction.transaction_type === 'DIVIDEND' ? (
+                                          // For dividends, show dividend per share
+                                          formatCurrency(
+                                            transaction.dividend_per_share || (transaction.price / (transaction.quantity || 1)),
+                                            transaction.currency || portfolio?.base_currency
+                                          )
+                                        ) : (
+                                          // For other transactions, show normal price
+                                          formatCurrency(transaction.price, transaction.currency || portfolio?.base_currency)
+                                        )}
                                       </Typography>
                                       {/* Show converted price if different currency and exchange rate available */}
                                       {transaction.currency &&
                                        transaction.currency !== portfolio?.base_currency &&
                                        transaction.exchange_rate && (
                                         <Typography variant="caption" display="block" color="text.secondary">
-                                          ({formatCurrency(transaction.price * transaction.exchange_rate, portfolio?.base_currency)})
+                                          {transaction.transaction_type === 'DIVIDEND' ? (
+                                            // Convert dividend per share
+                                            `(${formatCurrency(
+                                              (transaction.dividend_per_share || (transaction.price / (transaction.quantity || 1))) * transaction.exchange_rate,
+                                              portfolio?.base_currency
+                                            )})`
+                                          ) : (
+                                            // Convert normal price
+                                            `(${formatCurrency(transaction.price * transaction.exchange_rate, portfolio?.base_currency)})`
+                                          )}
                                         </Typography>
                                       )}
                                     </TableCell>
                                     <TableCell align="right">
-                                      {/* Show total in original transaction currency */}
+                                      {/* Show total - SPECIAL HANDLING FOR DIVIDENDS */}
                                       {formatCurrency(
-                                        transaction.transaction_type === 'BUY'
-                                          ? (transaction.quantity * transaction.price) + (transaction.fees || 0)
-                                          : transaction.transaction_type === 'SELL'
-                                          ? (transaction.quantity * transaction.price) - (transaction.fees || 0)
-                                          : transaction.value,
+                                        transaction.transaction_type === 'DIVIDEND' ? (
+                                          // For dividends, use the total dividend amount correctly
+                                          transaction.dividend_per_share ?
+                                            (transaction.quantity * transaction.dividend_per_share) + (transaction.fees || 0) :
+                                            transaction.price + (transaction.fees || 0)
+                                        ) : transaction.transaction_type === 'BUY' ? (
+                                          (transaction.quantity * transaction.price) + (transaction.fees || 0)
+                                        ) : transaction.transaction_type === 'SELL' ? (
+                                          (transaction.quantity * transaction.price) - (transaction.fees || 0)
+                                        ) : (
+                                          transaction.value || 0
+                                        ),
                                         transaction.currency || portfolio?.base_currency
                                       )}
                                       {/* Show converted value if different currency */}
                                       {transaction.currency && transaction.currency !== portfolio?.base_currency && (
                                         <Typography variant="caption" display="block" color="text.secondary">
-                                          ({formatCurrency(transaction.value, portfolio?.base_currency)})
+                                          ({formatCurrency(
+                                            transaction.base_amount || transaction.value || 0,
+                                            portfolio?.base_currency
+                                          )})
                                         </Typography>
                                       )}
                                     </TableCell>
                                     <TableCell align="right">
-                                      {transaction.transaction_type === 'BUY' && (
+                                      {transaction.transaction_type === 'DIVIDEND' ? (
+                                        // For dividends, show the dividend amount as positive gain
                                         <Box>
-                                          {/* Show gain/loss in transaction currency */}
+                                          <Typography variant="body2" color="success.main">
+                                            +{formatCurrency(
+                                              transaction.dividend_per_share ?
+                                                (transaction.quantity * transaction.dividend_per_share) :
+                                                transaction.price,
+                                              transaction.currency || portfolio?.base_currency
+                                            )}
+                                          </Typography>
+                                          {transaction.currency && transaction.currency !== portfolio?.base_currency && (
+                                            <Typography variant="caption" display="block" color="success.main">
+                                              (+{formatCurrency(transaction.base_amount || transaction.value || 0, portfolio?.base_currency)})
+                                            </Typography>
+                                          )}
+                                        </Box>
+                                      ) : transaction.transaction_type === 'BUY' && (
+                                        // Existing gain/loss logic for BUY transactions
+                                        <Box>
                                           <Typography
                                             variant="body2"
                                             color={transaction.gain_loss >= 0 ? 'success.main' : 'error.main'}
@@ -644,27 +689,16 @@ const ConsolidatedPortfolioDetails = () => {
                                           >
                                             {transaction.gain_loss >= 0 ? '+' : ''}{transaction.gain_loss_percentage.toFixed(2)}%
                                           </Typography>
-                                          {/* Show converted gain/loss if different currency */}
                                           {transaction.currency && transaction.currency !== portfolio?.base_currency && (
                                             <Typography variant="caption" display="block" color="text.secondary">
-                                              ({transaction.gain_loss >= 0 ? '+' : ''}{formatCurrency(Math.abs(transaction.gain_loss_base_currency || (transaction.gain_loss * (transaction.exchange_rate || 1))), portfolio?.base_currency)})
+                                              ({transaction.gain_loss >= 0 ? '+' : ''}{formatCurrency(Math.abs(transaction.gain_loss_converted || 0), portfolio?.base_currency)})
                                             </Typography>
                                           )}
                                         </Box>
                                       )}
-                                      {transaction.transaction_type === 'DIVIDEND' && (
-                                        <Typography variant="body2" color="info.main">
-                                          +{formatCurrency(transaction.value, portfolio?.base_currency)}
-                                        </Typography>
-                                      )}
-                                      {transaction.transaction_type === 'SELL' && (
+                                      {(transaction.transaction_type === 'SELL' || transaction.transaction_type === 'SPLIT') && (
                                         <Typography variant="body2" color="text.secondary">
-                                          Sold
-                                        </Typography>
-                                      )}
-                                      {transaction.transaction_type === 'SPLIT' && (
-                                        <Typography variant="body2" color="text.secondary">
-                                          -
+                                          —
                                         </Typography>
                                       )}
                                     </TableCell>
