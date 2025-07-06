@@ -630,27 +630,16 @@ const ConsolidatedPortfolioDetails = () => {
                                       )}
                                     </TableCell>
                                     <TableCell align="right">
-                                      {/* Show total - SPECIAL HANDLING FOR DIVIDENDS */}
+                                      {/* Show total - Use backend-provided values */}
                                       {formatCurrency(
-                                        transaction.transaction_type === 'DIVIDEND' ? (
-                                          // For dividends, use the total dividend amount correctly
-                                          transaction.dividend_per_share ?
-                                            (transaction.quantity * transaction.dividend_per_share) + (transaction.fees || 0) :
-                                            transaction.price + (transaction.fees || 0)
-                                        ) : transaction.transaction_type === 'BUY' ? (
-                                          (transaction.quantity * transaction.price) + (transaction.fees || 0)
-                                        ) : transaction.transaction_type === 'SELL' ? (
-                                          (transaction.quantity * transaction.price) - (transaction.fees || 0)
-                                        ) : (
-                                          transaction.value || 0
-                                        ),
+                                        transaction.value_original || transaction.value || 0,
                                         transaction.currency || portfolio?.base_currency
                                       )}
                                       {/* Show converted value if different currency */}
                                       {transaction.currency && transaction.currency !== portfolio?.base_currency && (
                                         <Typography variant="caption" display="block" color="text.secondary">
                                           ({formatCurrency(
-                                            transaction.base_amount || transaction.value || 0,
+                                            transaction.value || 0,
                                             portfolio?.base_currency
                                           )})
                                         </Typography>
@@ -662,15 +651,16 @@ const ConsolidatedPortfolioDetails = () => {
                                         <Box>
                                           <Typography variant="body2" color="success.main">
                                             +{formatCurrency(
-                                              transaction.dividend_per_share ?
-                                                (transaction.quantity * transaction.dividend_per_share) :
-                                                transaction.price,
+                                              transaction.gain_loss || transaction.value_original || 0,
                                               transaction.currency || portfolio?.base_currency
                                             )}
                                           </Typography>
                                           {transaction.currency && transaction.currency !== portfolio?.base_currency && (
                                             <Typography variant="caption" display="block" color="success.main">
-                                              (+{formatCurrency(transaction.base_amount || transaction.value || 0, portfolio?.base_currency)})
+                                              (+{formatCurrency(
+                                                transaction.gain_loss_base_currency || transaction.value || 0,
+                                                portfolio?.base_currency
+                                              )})
                                             </Typography>
                                           )}
                                         </Box>
@@ -691,7 +681,10 @@ const ConsolidatedPortfolioDetails = () => {
                                           </Typography>
                                           {transaction.currency && transaction.currency !== portfolio?.base_currency && (
                                             <Typography variant="caption" display="block" color="text.secondary">
-                                              ({transaction.gain_loss >= 0 ? '+' : ''}{formatCurrency(Math.abs(transaction.gain_loss_converted || 0), portfolio?.base_currency)})
+                                              ({transaction.gain_loss >= 0 ? '+' : ''}{formatCurrency(
+                                                Math.abs(transaction.gain_loss_base_currency || 0),
+                                                portfolio?.base_currency
+                                              )})
                                             </Typography>
                                           )}
                                         </Box>

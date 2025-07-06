@@ -915,7 +915,7 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         # Build transactions list
         transactions = []
 
-        # NEW: Calculate proper average costs in both currencies
+        # Calculate proper average costs in both currencies
         portfolio_base_currency = portfolio.base_currency or portfolio.currency
         security_currency = data['security'].currency
 
@@ -923,36 +923,17 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         total_cost_portfolio_currency = data.get('total_cost_base_currency', Decimal('0'))
         avg_cost_portfolio_currency = data.get('avg_cost_base_currency', Decimal('0'))
 
-        # For security currency, calculate from original transactions (without dividend adjustments)
-        security_transactions = Transaction.objects.filter(
-            portfolio=portfolio,
-            security=data['security'],
-            transaction_type__in=['BUY', 'SELL']
-        ).order_by('transaction_date')
+        # For security currency, use dividend-adjusted values from get_holdings() too
+        total_cost_security_currency = data.get('total_cost', Decimal('0'))
 
-        total_cost_security_currency = Decimal('0')
-        total_quantity = Decimal('0')
-
-        for transaction in security_transactions:
-            transaction_cost = (transaction.quantity * transaction.price) + (transaction.fees or 0)
-
-            if transaction.transaction_type == 'BUY':
-                total_quantity += transaction.quantity
-                total_cost_security_currency += transaction_cost
-            elif transaction.transaction_type == 'SELL':
-                # Subtract from totals (FIFO or weighted average)
-                sell_quantity = transaction.quantity
-                total_quantity -= sell_quantity
-
-                if total_quantity > 0:
-                    cost_per_share = total_cost_security_currency / (total_quantity + sell_quantity)
-                    total_cost_security_currency -= cost_per_share * sell_quantity
-
-        # Calculate average in security currency
-        if total_quantity > 0:
-            avg_cost_security_currency = total_cost_security_currency / total_quantity
+        # Calculate average cost in security currency
+        if data['quantity'] > 0:
+            avg_cost_security_currency = total_cost_security_currency / data['quantity']
         else:
             avg_cost_security_currency = Decimal('0')
+
+        # Get current value in base currency (using CURRENT exchange rate)
+        current_value_base_currency = data.get('current_value_base_currency', Decimal('0'))
 
         for transaction in data['transactions']:
             # Calculate gain/loss for this specific transaction in its original currency
@@ -1015,9 +996,21 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                     'exchange_rate': float(transaction.exchange_rate or 1),
                     'stock_id': transaction.security.id
                 }
-            else:
-                # Handle other transaction types (SELL, DIVIDEND, etc.)
-                total_amount = transaction.quantity * (transaction.price or 0)
+            elif transaction.transaction_type == 'DIVIDEND':
+                # For dividends, calculate the actual dividend amount
+                if transaction.dividend_per_share:
+                    dividend_amount = transaction.quantity * transaction.dividend_per_share
+                elif transaction.price:
+                    # If dividend_per_share is not set, use price field
+                    dividend_amount = transaction.price
+                else:
+                    dividend_amount = Decimal('0')
+
+                # Convert to base currency
+                if transaction.base_amount:
+                    dividend_base_currency = transaction.base_amount
+                else:
+                    dividend_base_currency = dividend_amount * (transaction.exchange_rate or Decimal('1'))
 
                 transaction_data = {
                     'id': transaction.id,
@@ -1027,7 +1020,39 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                     'quantity': float(transaction.quantity),
                     'price': float(transaction.price or 0),
                     'fees': float(transaction.fees or 0),
-                    'value': float(total_amount),  # Frontend expects 'value'
+                    'value': float(dividend_base_currency),  # Converted dividend amount
+                    'value_original': float(dividend_amount),  # Original dividend amount
+                    'total_amount': float(dividend_amount),
+                    'currency': transaction.currency,
+                    'exchange_rate': float(transaction.exchange_rate or 1),
+                    'stock_id': transaction.security.id,
+                    'dividend_per_share': float(
+                        transaction.dividend_per_share) if transaction.dividend_per_share else None,
+                    'base_amount': float(dividend_base_currency),
+                    # For dividends, the gain/loss is the dividend amount itself
+                    'gain_loss': float(dividend_amount),
+                    'gain_loss_base_currency': float(dividend_base_currency)
+                }
+            else:
+                # Handle other transaction types (SELL, etc.)
+                total_amount = transaction.quantity * (transaction.price or 0)
+
+                # Convert to base currency if needed
+                if transaction.base_amount:
+                    total_base_currency = transaction.base_amount
+                else:
+                    total_base_currency = total_amount * (transaction.exchange_rate or Decimal('1'))
+
+                transaction_data = {
+                    'id': transaction.id,
+                    'date': transaction.transaction_date.strftime('%Y-%m-%d'),
+                    'transaction_date': transaction.transaction_date.strftime('%Y-%m-%d'),
+                    'transaction_type': transaction.transaction_type,
+                    'quantity': float(transaction.quantity),
+                    'price': float(transaction.price or 0),
+                    'fees': float(transaction.fees or 0),
+                    'value': float(total_base_currency),  # Converted amount
+                    'value_original': float(total_amount),  # Original amount
                     'total_amount': float(total_amount),
                     'currency': transaction.currency,
                     'exchange_rate': float(transaction.exchange_rate or 1),
@@ -1038,52 +1063,6 @@ def portfolio_holdings_consolidated(request, portfolio_id):
 
         # Only include if there are transactions and positive quantity
         if transactions and data['quantity'] > 0:
-            # Calculate average cost in portfolio base currency
-            total_cost_base_currency = Decimal('0')
-            for tx in data['transactions']:
-                if tx.transaction_type == 'BUY':
-                    if tx.base_amount:
-                        total_cost_base_currency += tx.base_amount
-                    else:
-                        # Fallback calculation
-                        total_cost_base_currency += (tx.quantity * tx.price + tx.fees) * (
-                                    tx.exchange_rate or Decimal('1'))
-                elif tx.transaction_type == 'SELL':
-                    # Reduce cost basis proportionally
-                    if data['quantity'] > 0:
-                        cost_reduction = (tx.quantity / (data['quantity'] + tx.quantity)) * total_cost_base_currency
-                        total_cost_base_currency -= cost_reduction
-
-            avg_cost_base_currency = total_cost_base_currency / data['quantity'] if data['quantity'] > 0 else Decimal(
-                '0')
-
-            # Convert current value to portfolio currency using CURRENT exchange rate
-            security_currency = data['security'].currency
-            current_value_base_currency = data['current_value']  # This is in security currency
-
-            if security_currency != portfolio_currency:
-                from .services.currency_service import CurrencyService
-                try:
-                    # Use CURRENT exchange rate for current value conversion
-                    current_value_base_currency = CurrencyService.convert_amount(
-                        data['current_value'],
-                        security_currency,
-                        portfolio_currency
-                    )
-                except:
-                    # If conversion fails, use exchange rate from last transaction
-                    last_rate = transactions[-1]['exchange_rate'] if transactions else 1
-                    current_value_base_currency = data['current_value'] * Decimal(str(last_rate))
-
-            # Calculate total cost in original currency
-            security_currency = data['security'].currency
-            total_cost_original_currency = Decimal('0')
-
-            for tx in data['transactions']:
-                if tx.transaction_type == 'BUY':
-                    tx_cost_original = (tx.quantity * tx.price) + (tx.fees or 0)
-                    total_cost_original_currency += tx_cost_original
-
             consolidated_asset = {
                 'key': f"{data['security'].symbol}_{security_id}",
                 'symbol': data['security'].symbol,
@@ -1091,24 +1070,25 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 'asset_type': data['security'].security_type,
                 'category_name': data['security'].category.name if data['security'].category else None,
                 'total_quantity': float(data['quantity']),
-                # Average cost in portfolio base currency (includes fees)
-                'avg_cost_price': float(avg_cost_base_currency),
-                'avg_cost_price_original': float(total_cost_original_currency / data['quantity']) if data['quantity'] > 0 else 0,
+                # Average cost in portfolio base currency (includes fees and dividend adjustments)
+                'avg_cost_price': float(avg_cost_portfolio_currency),
+                'avg_cost_price_original': float(avg_cost_security_currency),
                 'security_currency': security_currency,
                 # Current price in original currency
                 'current_price': float(data['security'].current_price),
                 'current_price_currency': security_currency,
                 # Total value in portfolio base currency (using CURRENT exchange rate)
                 'total_current_value': float(current_value_base_currency),
-                # Total cost in portfolio base currency
-                'total_cost': float(total_cost_base_currency),
-                'total_cost_original': float(total_cost_original_currency),
+                # Total cost in portfolio base currency (dividend-adjusted)
+                'total_cost': float(total_cost_portfolio_currency),
+                'total_cost_original': float(total_cost_security_currency),
                 # Gain/loss in portfolio base currency (using CURRENT rate for current value)
-                'total_gain_loss': float(current_value_base_currency - total_cost_base_currency),
+                'total_gain_loss': float(current_value_base_currency - total_cost_portfolio_currency),
                 'total_dividends': float(data['total_dividends']),
                 'gain_loss_percentage': float(
-                    ((current_value_base_currency - total_cost_base_currency) / total_cost_base_currency * 100)
-                    if total_cost_base_currency > 0 else 0
+                    ((
+                                 current_value_base_currency - total_cost_portfolio_currency) / total_cost_portfolio_currency * 100)
+                    if total_cost_portfolio_currency > 0 else 0
                 ),
                 'transactions': sorted(transactions, key=lambda x: x['date'], reverse=True)
             }
