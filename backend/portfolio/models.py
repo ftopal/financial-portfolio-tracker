@@ -495,9 +495,14 @@ class Transaction(models.Model):
             return (self.quantity * self.price) - self.fees
         elif self.transaction_type == 'DIVIDEND':
             if self.dividend_per_share:
-                return self.quantity * self.dividend_per_share
+                # Subtract fees from dividend amount
+                return (self.quantity * self.dividend_per_share) - self.fees
             elif self.price and self.quantity:
-                return self.price
+                # When using price field for total dividend, subtract fees
+                return self.price - self.fees
+            elif self.price:
+                # If only price is set (total dividend), subtract fees
+                return self.price - self.fees
             return Decimal('0')
         elif self.transaction_type == 'SPLIT':
             return Decimal('0')

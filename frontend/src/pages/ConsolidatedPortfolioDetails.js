@@ -599,34 +599,41 @@ const ConsolidatedPortfolioDetails = () => {
                                     <TableCell align="right">{transaction.quantity}</TableCell>
                                     <TableCell align="right">
                                       {/* Show price - SPECIAL HANDLING FOR DIVIDENDS */}
-                                      <Typography variant="body2">
-                                        {transaction.transaction_type === 'DIVIDEND' ? (
-                                          // For dividends, show dividend per share
-                                          formatCurrency(
-                                            transaction.dividend_per_share || (transaction.price / (transaction.quantity || 1)),
-                                            transaction.currency || portfolio?.base_currency
-                                          )
-                                        ) : (
-                                          // For other transactions, show normal price
-                                          formatCurrency(transaction.price, transaction.currency || portfolio?.base_currency)
-                                        )}
-                                      </Typography>
-                                      {/* Show converted price if different currency and exchange rate available */}
-                                      {transaction.currency &&
-                                       transaction.currency !== portfolio?.base_currency &&
-                                       transaction.exchange_rate && (
-                                        <Typography variant="caption" display="block" color="text.secondary">
-                                          {transaction.transaction_type === 'DIVIDEND' ? (
-                                            // Convert dividend per share
-                                            `(${formatCurrency(
-                                              (transaction.dividend_per_share || (transaction.price / (transaction.quantity || 1))) * transaction.exchange_rate,
-                                              portfolio?.base_currency
-                                            )})`
-                                          ) : (
-                                            // Convert normal price
-                                            `(${formatCurrency(transaction.price * transaction.exchange_rate, portfolio?.base_currency)})`
+                                      {transaction.transaction_type === 'DIVIDEND' ? (
+                                        // For dividends, show dividend per share with label
+                                        <Box>
+                                          <Typography variant="body2">
+                                            {formatCurrency(
+                                              transaction.dividend_per_share || (transaction.price / (transaction.quantity || 1)),
+                                              transaction.currency || portfolio?.base_currency
+                                            )}
+                                          </Typography>
+                                          {/* Show converted amount if different currency */}
+                                          {transaction.currency && transaction.currency !== portfolio?.base_currency && (
+                                            <Typography variant="caption" display="block" color="text.secondary">
+                                              ({formatCurrency(
+                                                (transaction.dividend_per_share || (transaction.price / (transaction.quantity || 1))) * transaction.exchange_rate,
+                                                portfolio?.base_currency
+                                              )})
+                                            </Typography>
                                           )}
-                                        </Typography>
+                                          <Typography variant="caption" display="block" color="info.main" fontWeight="medium">
+                                            Dividend Per Share
+                                          </Typography>
+                                        </Box>
+                                      ) : (
+                                        // For other transactions, show normal price
+                                        <Box>
+                                          <Typography variant="body2">
+                                            {formatCurrency(transaction.price, transaction.currency || portfolio?.base_currency)}
+                                          </Typography>
+                                          {/* Show converted price if different currency */}
+                                          {transaction.currency && transaction.currency !== portfolio?.base_currency && (
+                                            <Typography variant="caption" display="block" color="text.secondary">
+                                              ({formatCurrency(transaction.price * transaction.exchange_rate, portfolio?.base_currency)})
+                                            </Typography>
+                                          )}
+                                        </Box>
                                       )}
                                     </TableCell>
                                     <TableCell align="right">

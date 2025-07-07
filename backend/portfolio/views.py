@@ -1048,14 +1048,8 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                     'stock_id': transaction.security.id
                 }
             elif transaction.transaction_type == 'DIVIDEND':
-                # For dividends, calculate the actual dividend amount
-                if transaction.dividend_per_share:
-                    dividend_amount = transaction.quantity * transaction.dividend_per_share
-                elif transaction.price:
-                    # If dividend_per_share is not set, use price field
-                    dividend_amount = transaction.price
-                else:
-                    dividend_amount = Decimal('0')
+                # For dividends, use the NET amount (after fees)
+                dividend_amount = transaction.total_value_transaction_currency  # This now returns NET dividend
 
                 # Convert to base currency
                 if transaction.base_amount:
@@ -1071,16 +1065,16 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                     'quantity': float(transaction.quantity),
                     'price': float(transaction.price or 0),
                     'fees': float(transaction.fees or 0),
-                    'value': float(dividend_base_currency),  # Converted dividend amount
-                    'value_original': float(dividend_amount),  # Original dividend amount
-                    'total_amount': float(dividend_amount),
+                    'value': float(dividend_base_currency),  # Converted NET dividend amount
+                    'value_original': float(dividend_amount),  # Original NET dividend amount
+                    'total_amount': float(dividend_amount),  # NET amount for display
                     'currency': transaction.currency,
                     'exchange_rate': float(transaction.exchange_rate or 1),
                     'stock_id': transaction.security.id,
                     'dividend_per_share': float(
                         transaction.dividend_per_share) if transaction.dividend_per_share else None,
                     'base_amount': float(dividend_base_currency),
-                    # For dividends, the gain/loss is the dividend amount itself
+                    # For dividends, the gain/loss is the NET dividend amount
                     'gain_loss': float(dividend_amount),
                     'gain_loss_base_currency': float(dividend_base_currency)
                 }
