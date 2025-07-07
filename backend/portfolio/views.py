@@ -1166,8 +1166,30 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         'total_transactions': sum(len(item['transactions']) for item in consolidated_assets)
     }
 
+    portfolio_data = {
+        'id': portfolio.id,
+        'name': portfolio.name,
+        'description': portfolio.description,
+        'currency': portfolio.currency,
+        'base_currency': portfolio.base_currency,
+        'is_default': portfolio.is_default,
+        'created_at': portfolio.created_at,
+        'updated_at': portfolio.updated_at,
+        # Add the summary data directly
+        'total_value': summary['total_value'],
+        'total_cost': summary['total_cost'],
+        'total_gains': summary['total_gain_loss'],
+        'total_gain_loss': summary['total_gain_loss'],
+        'gain_loss_percentage': (summary['total_gain_loss'] / summary['total_cost'] * 100) if summary['total_cost'] > 0 else 0,
+        'holdings_count': summary['unique_assets'],
+        'asset_count': summary['unique_assets'],
+        'transaction_count': summary['total_transactions'],
+        'cash_balance': cash_balance,
+        'total_value_with_cash': summary['total_value']
+    }
+
     return Response({
-        'portfolio': PortfolioSerializer(portfolio).data,
+        'portfolio': portfolio_data,
         'consolidated_assets': consolidated_assets,
         'cash_account': cash_info,
         'summary': summary
