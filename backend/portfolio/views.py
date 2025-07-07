@@ -897,7 +897,7 @@ def portfolio_holdings_consolidated(request, portfolio_id):
     except Portfolio.DoesNotExist:
         return Response({'error': 'Portfolio not found'}, status=404)
 
-    holdings = portfolio.get_holdings()
+    holdings = portfolio.get_holdings_cached()
 
     # DEBUG: Let's see what get_holdings() actually calculated
     for security_id, data in holdings.items():

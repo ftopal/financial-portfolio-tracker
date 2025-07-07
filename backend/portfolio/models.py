@@ -28,6 +28,12 @@ class Portfolio(models.Model):
         unique_together = ['user', 'name']
         ordering = ['-created_at']
 
+    def get_holdings_cached(self):
+        """Get holdings with request-level caching"""
+        if not hasattr(self, '_cached_holdings'):
+            self._cached_holdings = self.get_holdings()
+        return self._cached_holdings
+
     def __str__(self):
         return f"{self.name} ({self.user.username})"
 

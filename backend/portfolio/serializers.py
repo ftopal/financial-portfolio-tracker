@@ -339,6 +339,16 @@ class PortfolioSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
 
+    def to_representation(self, instance):
+        # Cache both holdings and summary for this serialization
+        if not hasattr(instance, '_cached_holdings'):
+            instance._cached_holdings = instance.get_holdings()
+        if not hasattr(instance, '_cached_summary'):
+            instance._cached_summary = instance.get_summary()
+
+        data = super().to_representation(instance)
+        return data
+
     def get_cash_balance(self, obj):
         """Get current cash balance"""
         if hasattr(obj, 'cash_account'):
@@ -350,20 +360,24 @@ class PortfolioSerializer(serializers.ModelSerializer):
         return float(obj.get_total_value())
 
     def get_total_value(self, obj):
-        summary = obj.get_summary()
-        return float(summary['total_value'])
+        if hasattr(obj, '_cached_summary'):
+            return float(obj._cached_summary['total_value'])
+        return float(obj.get_summary()['total_value'])
 
     def get_total_cost(self, obj):
-        summary = obj.get_summary()
-        return float(summary['total_cost'])
+        if hasattr(obj, '_cached_summary'):
+            return float(obj._cached_summary['total_cost'])
+        return float(obj.get_summary()['total_cost'])
 
     def get_total_gains(self, obj):
-        summary = obj.get_summary()
-        return float(summary['total_gains'])
+        if hasattr(obj, '_cached_summary'):
+            return float(obj._cached_summary['total_gains'])
+        return float(obj.get_summary()['total_gains'])
 
     def get_holdings_count(self, obj):
-        summary = obj.get_summary()
-        return summary['holdings_count']
+        if hasattr(obj, '_cached_summary'):
+            return obj._cached_summary['holdings_count']
+        return obj.get_summary()['holdings_count']
 
     def get_asset_count(self, obj):
         # Use annotated field if available, otherwise calculate
@@ -381,13 +395,14 @@ class PortfolioSerializer(serializers.ModelSerializer):
         return obj.transactions.count()
 
     def get_total_gain_loss(self, obj):
-        # This is the same as total_gains but named differently for frontend compatibility
-        summary = obj.get_summary()
-        return float(summary['total_gains'])
+        if hasattr(obj, '_cached_summary'):
+            return float(obj._cached_summary['total_gains'])
+        return float(obj.get_summary()['total_gains'])
 
     def get_gain_loss_percentage(self, obj):
-        summary = obj.get_summary()
-        return float(summary['total_return_pct'])
+        if hasattr(obj, '_cached_summary'):
+            return float(obj._cached_summary['total_return_pct'])
+        return float(obj.get_summary()['total_return_pct'])
 
 class PortfolioCashAccountSerializer(serializers.ModelSerializer):
     portfolio_name = serializers.ReadOnlyField(source='portfolio.name')
