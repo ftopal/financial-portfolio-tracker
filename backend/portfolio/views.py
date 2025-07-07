@@ -919,12 +919,56 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         portfolio_base_currency = portfolio.base_currency or portfolio.currency
         security_currency = data['security'].currency
 
-        # ✅ USE the correct values from get_holdings() (which already accounts for dividends)
+        # ✅ USE the correct values from get_holdings() (which already accounts for dividends but NOT fees)
+        # For portfolio currency, we need to add fees to the cost basis
         total_cost_portfolio_currency = data.get('total_cost_base_currency', Decimal('0'))
-        avg_cost_portfolio_currency = data.get('avg_cost_base_currency', Decimal('0'))
 
-        # For security currency, use dividend-adjusted values from get_holdings() too
-        total_cost_security_currency = data.get('total_cost', Decimal('0'))
+        # Add fees to the total cost for portfolio currency
+        fees_total_portfolio_currency = Decimal('0')
+        for transaction in data['transactions']:
+            if transaction.transaction_type == 'BUY':
+                if transaction.base_amount:
+                    # base_amount includes fees, so calculate fees from the difference
+                    cost_without_fees = (transaction.quantity * transaction.price) * (
+                                transaction.exchange_rate or Decimal('1'))
+                    fees_total_portfolio_currency += transaction.base_amount - cost_without_fees
+                else:
+                    fees_total_portfolio_currency += transaction.fees * (transaction.exchange_rate or Decimal('1'))
+            elif transaction.transaction_type == 'SELL':
+                if data['quantity'] > 0:
+                    # Reduce fees proportionally for sells
+                    cost_per_share = fees_total_portfolio_currency / (data['quantity'] + transaction.quantity)
+                    fees_total_portfolio_currency -= cost_per_share * transaction.quantity
+
+        # Add fees to total cost
+        total_cost_portfolio_currency += fees_total_portfolio_currency
+
+        # Calculate average cost including fees
+        if data['quantity'] > 0:
+            avg_cost_portfolio_currency = total_cost_portfolio_currency / data['quantity']
+        else:
+            avg_cost_portfolio_currency = Decimal('0')
+
+        # For security currency, we need to calculate total cost including fees
+        # get_holdings() only tracks quantity * price, not fees
+        total_cost_security_currency = Decimal('0')
+
+        # Calculate total cost including fees from transactions
+        for transaction in data['transactions']:
+            if transaction.transaction_type == 'BUY':
+                total_cost_security_currency += (transaction.quantity * transaction.price) + transaction.fees
+            elif transaction.transaction_type == 'SELL':
+                # For SELL, reduce cost basis proportionally
+                if data['quantity'] > 0:
+                    cost_per_share = total_cost_security_currency / (data['quantity'] + transaction.quantity)
+                    total_cost_security_currency -= cost_per_share * transaction.quantity
+            elif transaction.transaction_type == 'DIVIDEND':
+                # Dividends reduce cost basis
+                if transaction.dividend_per_share:
+                    dividend_amount = transaction.quantity * transaction.dividend_per_share
+                else:
+                    dividend_amount = transaction.price or Decimal('0')
+                total_cost_security_currency -= dividend_amount
 
         # Calculate average cost in security currency
         if data['quantity'] > 0:
@@ -1079,7 +1123,7 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 'current_price_currency': security_currency,
                 # Total value in portfolio base currency (using CURRENT exchange rate)
                 'total_current_value': float(current_value_base_currency),
-                # Total cost in portfolio base currency (dividend-adjusted)
+                # Total cost in portfolio base currency (dividend-adjusted and includes fees)
                 'total_cost': float(total_cost_portfolio_currency),
                 'total_cost_original': float(total_cost_security_currency),
                 # Gain/loss in portfolio base currency (using CURRENT rate for current value)
