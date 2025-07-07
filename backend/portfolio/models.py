@@ -134,34 +134,44 @@ class Portfolio(models.Model):
 
 
             elif transaction.transaction_type == 'DIVIDEND':
-                # Calculate actual dividend amount in portfolio base currency
-                if transaction.base_amount:
-                    dividend_amount_base_currency = transaction.base_amount
+                # Calculate actual dividend amount (NET of fees) in portfolio base currency
+                if transaction.dividend_per_share:
+                    gross_dividend = transaction.quantity * transaction.dividend_per_share
                 else:
-                    dividend_amount_base_currency = transaction.total_value
+                    gross_dividend = transaction.price or Decimal('0')
+
+                # Subtract fees to get net dividend
+                net_dividend = gross_dividend - transaction.fees
+
+                # Convert to base currency if needed
+                if transaction.base_amount:
+                    # If we have base_amount, we need to recalculate it for net dividend
+                    if transaction.exchange_rate and transaction.exchange_rate != Decimal('1'):
+                        dividend_amount_base_currency = net_dividend * transaction.exchange_rate
+                    else:
+                        dividend_amount_base_currency = net_dividend
+                else:
+                    dividend_amount_base_currency = net_dividend
 
                 # Debug logging
                 print(f"DIVIDEND DEBUG: Symbol={transaction.security.symbol}")
+                print(f"  Gross dividend: {gross_dividend}")
+                print(f"  Fees: {transaction.fees}")
+                print(f"  Net dividend: {net_dividend}")
                 print(f"  Dividend amount (base currency): {dividend_amount_base_currency}")
                 print(f"  Total cost before dividend: {holdings[security_id]['total_cost_base_currency']}")
 
                 holdings[security_id]['total_dividends'] += dividend_amount_base_currency
 
-                # ✅ CRITICAL FIX: Dividends reduce the effective cost basis
+                # ✅ CRITICAL FIX: Dividends reduce the effective cost basis by NET amount
                 holdings[security_id]['total_cost_base_currency'] -= dividend_amount_base_currency
                 holdings[security_id]['net_cash_invested'] -= dividend_amount_base_currency
 
-                # Also reduce the original currency cost if we track it separately
-                if transaction.dividend_per_share and transaction.quantity:
-                    dividend_amount_original = transaction.dividend_per_share * transaction.quantity
-                    holdings[security_id]['total_cost'] -= dividend_amount_original
+                # Also reduce the original currency cost by net dividend
+                holdings[security_id]['total_cost'] -= net_dividend
 
                 print(f"  Total cost after dividend: {holdings[security_id]['total_cost_base_currency']}")
                 print(f"  Quantity: {holdings[security_id]['quantity']}")
-
-                if holdings[security_id]['quantity'] > 0:
-                    new_avg = holdings[security_id]['total_cost_base_currency'] / holdings[security_id]['quantity']
-                    print(f"  New avg cost: {new_avg}")
 
         # Calculate current metrics for each holding
         for security_id, data in holdings.items():
@@ -448,9 +458,11 @@ class Transaction(models.Model):
             raw_value = (self.quantity * self.price) - self.fees
         elif self.transaction_type == 'DIVIDEND':
             if self.dividend_per_share:
-                raw_value = self.quantity * self.dividend_per_share
+                # For dividends, fees are deducted from the dividend amount
+                raw_value = (self.quantity * self.dividend_per_share) - self.fees
             elif self.price and self.quantity:
-                raw_value = self.price
+                # If using price field for total dividend
+                raw_value = self.price - self.fees
             else:
                 raw_value = Decimal('0')
         elif self.transaction_type == 'SPLIT':
@@ -466,8 +478,10 @@ class Transaction(models.Model):
         # If we have a base_amount (converted value), use that
         # base_amount ALREADY includes fees from the save() method
         if self.base_amount:
-            return self.base_amount  # Don't add fees again!
-        elif self.exchange_rate and self.exchange_rate != Decimal('1'):
+            return self.base_amount
+
+        # Convert to base currency if needed
+        if self.currency != self.portfolio.base_currency and self.exchange_rate:
             return raw_value * self.exchange_rate
         else:
             return raw_value

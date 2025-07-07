@@ -4,6 +4,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Divider,
   TextField,
   Button,
   FormControl,
@@ -327,10 +328,12 @@ const TransactionForm = ({
 
       // Calculate base amount
       let totalInTransactionCurrency;
-      if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
+      if (formData.transaction_type === 'BUY') {
         totalInTransactionCurrency = amount + fees;
       } else if (formData.transaction_type === 'SELL') {
         totalInTransactionCurrency = amount - fees;
+      } else if (formData.transaction_type === 'DIVIDEND') {
+        totalInTransactionCurrency = amount - fees;  // SUBTRACT fees for dividends
       } else {
         totalInTransactionCurrency = amount;
       }
@@ -411,10 +414,12 @@ const TransactionForm = ({
       const fees = parseFloat(formData.fees || 0);
 
       let totalInTransactionCurrency;
-      if (formData.transaction_type === 'BUY' || formData.transaction_type === 'DIVIDEND') {
+      if (formData.transaction_type === 'BUY') {
         totalInTransactionCurrency = (quantity * price) + fees;
       } else if (formData.transaction_type === 'SELL') {
         totalInTransactionCurrency = (quantity * price) - fees;
+      } else if (formData.transaction_type === 'DIVIDEND') {
+        totalInTransactionCurrency = price - fees;  // For dividends, price is total amount, subtract fees
       } else {
         totalInTransactionCurrency = quantity * price;
       }
@@ -561,7 +566,7 @@ const TransactionForm = ({
     : parseFloat(formData.price || 0) * parseFloat(formData.quantity || 0);
 
   const totalWithFees = formData.transaction_type === 'DIVIDEND'
-    ? totalAmount + parseFloat(formData.fees || 0)
+    ? totalAmount - parseFloat(formData.fees || 0)
     : formData.transaction_type === 'SPLIT'
     ? 0
     : formData.transaction_type === 'BUY'
@@ -864,6 +869,11 @@ const TransactionForm = ({
                 onChange={(e) => setFormData({ ...formData, fees: e.target.value })}
                 inputProps={{ step: "0.01", min: "0" }}
                 fullWidth
+                helperText={
+                  formData.transaction_type === 'DIVIDEND'
+                    ? "Fees will be deducted from dividend. Net amount will be added to cash."
+                    : null
+                }
               />
             )}
           </Box>
@@ -950,10 +960,11 @@ const TransactionForm = ({
                   No cash impact for stock splits
                 </Typography>
               </>
-            ) : (
+            ) : formData.transaction_type === 'DIVIDEND' ? (
+              // Enhanced dividend summary display
               <>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2">Subtotal:</Typography>
+                  <Typography variant="body2">Gross Dividend:</Typography>
                   <CurrencyDisplay
                     amount={totalAmount}
                     currency={formData.currency}
@@ -961,7 +972,7 @@ const TransactionForm = ({
                   />
                 </Box>
 
-                {formData.transaction_type === 'DIVIDEND' && formData.quantity && formData.price && (
+                {formData.quantity && formData.price && (
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                     <Typography variant="body2">Dividend per share:</Typography>
                     <CurrencyDisplay
@@ -972,18 +983,25 @@ const TransactionForm = ({
                   </Box>
                 )}
 
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2">Fees:</Typography>
-                  <CurrencyDisplay
-                    amount={parseFloat(formData.fees || 0)}
-                    currency={formData.currency}
-                    showCode={true}
-                  />
-                </Box>
+                {parseFloat(formData.fees || 0) > 0 && (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="body2">Fees:</Typography>
+                      <Typography variant="body2" color="error">
+                        -<CurrencyDisplay
+                          amount={parseFloat(formData.fees || 0)}
+                          currency={formData.currency}
+                          showCode={true}
+                        />
+                      </Typography>
+                    </Box>
+                    <Divider sx={{ my: 1 }} />
+                  </>
+                )}
 
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2" fontWeight="bold">Total:</Typography>
-                  <Typography variant="body2" fontWeight="bold">
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography variant="body1" fontWeight="bold">Net Dividend:</Typography>
+                  <Typography variant="body1" fontWeight="bold" color="success.main">
                     <CurrencyDisplay
                       amount={totalWithFees}
                       currency={formData.currency}
@@ -992,24 +1010,75 @@ const TransactionForm = ({
                   </Typography>
                 </Box>
 
-                {currentPortfolio && formData.currency !== portfolioCurrency && convertedAmountWithFees && (
-                  <>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2, pt: 2, borderTop: 1, borderColor: 'divider' }}>
-                      <Typography variant="body2" color="text.secondary">
-                        Portfolio Currency ({portfolioCurrency}):
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" fontWeight="bold">
-                        <CurrencyDisplay
-                          amount={convertedAmountWithFees}
-                          currency={portfolioCurrency}
-                          showCode={true}
-                        />
-                      </Typography>
-                    </Box>
-                    <Typography variant="caption" color="text.secondary" display="block" textAlign="right">
-                      Exchange Rate: 1 {formData.currency} = {exchangeRate?.toFixed(4)} {portfolioCurrency}
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                  Net amount will be added to cash and reduce cost basis
+                </Typography>
+              </>
+            ) : (
+              // Standard transaction summary for BUY/SELL
+              <>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="body2">Subtotal:</Typography>
+                  <CurrencyDisplay
+                    amount={totalAmount}
+                    currency={formData.currency}
+                    showCode={true}
+                  />
+                </Box>
+
+                {parseFloat(formData.fees || 0) > 0 && (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="body2">Fees:</Typography>
+                    <CurrencyDisplay
+                      amount={parseFloat(formData.fees || 0)}
+                      currency={formData.currency}
+                      showCode={true}
+                    />
+                  </Box>
+                )}
+
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
+                  <Typography variant="body1" fontWeight="bold">Total:</Typography>
+                  <Typography variant="body1" fontWeight="bold">
+                    <CurrencyDisplay
+                      amount={totalWithFees}
+                      currency={formData.currency}
+                      showCode={true}
+                    />
+                  </Typography>
+                </Box>
+              </>
+            )}
+
+            {/* Exchange rate and converted amount display */}
+            {formData.currency !== portfolioCurrency && formData.transaction_type !== 'SPLIT' && (
+              <>
+                <Divider sx={{ my: 2 }} />
+
+                {exchangeRate && (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="caption" color="text.secondary">
+                      Exchange Rate:
                     </Typography>
-                  </>
+                    <Typography variant="caption" color="text.secondary">
+                      1 {formData.currency} = {exchangeRate.toFixed(4)} {portfolioCurrency}
+                    </Typography>
+                  </Box>
+                )}
+
+                {convertedAmountWithFees !== null && (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Typography variant="body2" fontWeight="bold">
+                      Total in {portfolioCurrency}:
+                    </Typography>
+                    <Typography variant="body2" fontWeight="bold" color="primary">
+                      <CurrencyDisplay
+                        amount={convertedAmountWithFees}
+                        currency={portfolioCurrency}
+                        showCode={true}
+                      />
+                    </Typography>
+                  </Box>
                 )}
               </>
             )}

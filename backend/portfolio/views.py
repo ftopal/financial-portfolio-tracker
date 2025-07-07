@@ -653,16 +653,23 @@ class TransactionViewSet(viewsets.ModelViewSet):
             )
             cash_account.update_balance(proceeds)
 
+
         elif transaction.transaction_type == 'DIVIDEND':
             # Create dividend cash transaction
+            # Note: transaction.total_value already returns NET dividend (after fees) from the model property
             dividend_amount = transaction.total_value
+
+            # Create description that includes fee information
+            description = f'Dividend from {transaction.security.symbol}'
+            if transaction.fees > 0:
+                description += f' (net after {transaction.fees} {transaction.currency} fees)'
 
             CashTransaction.objects.create(
                 cash_account=cash_account,
                 user=self.request.user,
                 transaction_type='DIVIDEND',
                 amount=dividend_amount,
-                description=f'Dividend from {transaction.security.symbol}',
+                description=description,
                 transaction_date=transaction.transaction_date,
                 related_transaction=transaction
             )

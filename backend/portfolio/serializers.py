@@ -124,6 +124,12 @@ class TransactionSerializer(serializers.ModelSerializer):
                         total_amount = (quantity * price) + fees
                     elif transaction_type == 'SELL':
                         total_amount = (quantity * price) - fees
+                    elif transaction_type == 'DIVIDEND':
+                        # For dividends, fees should be subtracted
+                        if 'dividend_per_share' in validated_data:
+                            total_amount = (quantity * validated_data['dividend_per_share']) - fees
+                        else:
+                            total_amount = (validated_data.get('price', 0) or 0) - fees
                     else:
                         total_amount = quantity * price
 
@@ -214,6 +220,12 @@ class TransactionSerializer(serializers.ModelSerializer):
                     total_amount = (quantity * price) + fees
                 elif transaction_type == 'SELL':
                     total_amount = (quantity * price) - fees
+                elif transaction_type == 'DIVIDEND':
+                    # For dividends, fees should be subtracted, not added
+                    if validated_data.get('dividend_per_share'):
+                        total_amount = (quantity * validated_data.get('dividend_per_share')) - fees
+                    else:
+                        total_amount = (validated_data.get('price', price) or 0) - fees
                 else:
                     total_amount = quantity * price
 
