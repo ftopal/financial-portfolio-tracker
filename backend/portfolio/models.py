@@ -3,6 +3,8 @@ from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator
 from decimal import Decimal
 from django.utils import timezone
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 from django.db.models import Sum, F, Q, Case, When, DecimalField
 from .models_currency import Currency, ExchangeRate
 import logging
@@ -525,11 +527,18 @@ class Transaction(models.Model):
                 # Frontend sends total dividend amount in price field
                 # Calculate dividend_per_share from total amount
                 if self.quantity > 0:
-                    self.dividend_per_share = self.price / self.quantity
+                    # Round to 4 decimal places to match the field specification
+                    calculated_dps = self.price / self.quantity
+                    self.dividend_per_share = Decimal(str(round(float(calculated_dps), 4)))
                 else:
                     raise ValidationError("Quantity must be greater than 0 for dividend transactions.")
-            elif not self.dividend_per_share:
-                raise ValidationError("Dividend per share or price is required for dividend transactions.")
+            elif not self.dividend_per_share and not self.price:
+                raise ValidationError(
+                    "Dividend per share or total dividend amount (price) is required for dividend transactions.")
+
+            # If dividend_per_share is provided, ensure it's properly rounded
+            if self.dividend_per_share:
+                self.dividend_per_share = Decimal(str(round(float(self.dividend_per_share), 4)))
 
         # Validate stock split fields
         if self.transaction_type == 'SPLIT':
@@ -725,36 +734,47 @@ class PortfolioCashAccount(models.Model):
         return holdings
 
     def update_balance(self, amount):
-        """Update balance by amount (positive for deposits, negative for withdrawals)"""
-        from decimal import Decimal
-        self.balance += Decimal(str(amount))
-        self.save()
-
-    def recalculate_balance(self):
         """
-        Recalculate balance from all transactions - useful for fixing inconsistencies
+        Update balance by amount - DEPRECATED
+        Use recalculate_balances() instead for accurate balance tracking
+        """
+        # For backward compatibility, we'll just trigger a full recalculation
+        self.recalculate_balances()
+        return self.balance
+
+    def recalculate_balances(self):
+        """
+        Recalculate balance_after for all transactions in chronological order
         """
         from decimal import Decimal
-        from django.db.models import Sum
 
-        # Sum all cash transactions for this account
-        total_amount = self.transactions.aggregate(
-            total=Sum('amount')
-        )['total'] or Decimal('0')
+        # Get all transactions ordered by transaction date and creation time
+        transactions = self.transactions.order_by('transaction_date', 'created_at')
 
-        # Update balance
-        old_balance = self.balance
-        self.balance = total_amount
-        self.save()
+        running_balance = Decimal('0')
 
-        # Log the operation
-        logger.info(f"Recalculated balance for {self.portfolio.name}: {old_balance} -> {self.balance}")
+        # Use bulk_update to avoid triggering signals
+        transactions_to_update = []
 
-        return {
-            'old_balance': float(old_balance),
-            'new_balance': float(self.balance),
-            'difference': float(self.balance - old_balance)
-        }
+        for transaction in transactions:
+            running_balance += transaction.amount
+
+            # Check if balance_after needs updating
+            if transaction.balance_after != running_balance:
+                transaction.balance_after = running_balance
+                transactions_to_update.append(transaction)
+
+        # Bulk update all transactions at once (doesn't trigger signals)
+        if transactions_to_update:
+            # Use the model class from the transaction instance
+            transaction.__class__.objects.bulk_update(transactions_to_update, ['balance_after'])
+
+        # Update the cash account's current balance
+        if self.balance != running_balance:
+            self.balance = running_balance
+            self.save(update_fields=['balance'])
+
+        return running_balance
 
     def get_balance_verification(self):
         """
@@ -851,6 +871,28 @@ class CashTransaction(models.Model):
         if not self.balance_after:
             self.balance_after = self.cash_account.balance + self.amount
         super().save(*args, **kwargs)
+
+
+@receiver(post_save, sender=CashTransaction)
+def recalculate_on_save(sender, instance, created, **kwargs):
+    """
+    Recalculate balances whenever a cash transaction is saved
+    """
+    if created or kwargs.get('update_fields'):
+        instance.cash_account.recalculate_balances()
+
+
+@receiver(post_delete, sender=CashTransaction)
+def recalculate_on_delete(sender, instance, **kwargs):
+    """
+    Recalculate balances whenever a cash transaction is deleted
+    """
+    # Store the cash account before deletion
+    cash_account = instance.cash_account
+
+    # Use Django's transaction.on_commit to ensure this runs after the delete is committed
+    from django.db import transaction
+    transaction.on_commit(lambda: cash_account.recalculate_balances())
 
 
 class UserPreferences(models.Model):

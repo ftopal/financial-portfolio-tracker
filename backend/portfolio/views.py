@@ -211,7 +211,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         if amount <= 0:
             return Response({'error': 'Amount must be positive'}, status=400)
 
-        # Get or create cash account using the correct model name
+        # Get or create cash account
         from .models import PortfolioCashAccount, CashTransaction
         cash_account, created = PortfolioCashAccount.objects.get_or_create(
             portfolio=portfolio,
@@ -226,12 +226,13 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             amount=amount,
             description=request.data.get('description', 'Cash deposit'),
             transaction_date=request.data.get('transaction_date', timezone.now()),
-            balance_after=cash_account.balance + amount
         )
 
-        # Update cash account balance
-        cash_account.balance += amount
-        cash_account.save()
+        # Recalculate all balances
+        cash_account.recalculate_balances()
+
+        # Refresh transaction to get updated balance_after
+        transaction.refresh_from_db()
 
         serializer = CashTransactionSerializer(transaction)
         return Response(serializer.data, status=201)
@@ -604,7 +605,9 @@ class TransactionViewSet(viewsets.ModelViewSet):
             # Calculate total cost including fees
             total_cost = transaction.total_value
 
-            # Check cash balance
+            # Check cash balance (use the recalculated balance)
+            cash_account.recalculate_balances()
+
             if not cash_account.has_sufficient_balance(total_cost):
                 if preferences.auto_deposit_enabled:
                     # Calculate deposit amount based on mode
@@ -623,7 +626,6 @@ class TransactionViewSet(viewsets.ModelViewSet):
                         transaction_date=transaction.transaction_date,
                         is_auto_deposit=True
                     )
-                    cash_account.update_balance(deposit_amount)
 
             # Create buy cash transaction
             CashTransaction.objects.create(
@@ -635,7 +637,6 @@ class TransactionViewSet(viewsets.ModelViewSet):
                 transaction_date=transaction.transaction_date,
                 related_transaction=transaction
             )
-            cash_account.update_balance(-total_cost)
 
         elif transaction.transaction_type == 'SELL':
             # Calculate proceeds after fees
@@ -651,12 +652,9 @@ class TransactionViewSet(viewsets.ModelViewSet):
                 transaction_date=transaction.transaction_date,
                 related_transaction=transaction
             )
-            cash_account.update_balance(proceeds)
-
 
         elif transaction.transaction_type == 'DIVIDEND':
             # Create dividend cash transaction
-            # Note: transaction.total_value already returns NET dividend (after fees) from the model property
             dividend_amount = transaction.total_value
 
             # Create description that includes fee information
@@ -673,7 +671,9 @@ class TransactionViewSet(viewsets.ModelViewSet):
                 transaction_date=transaction.transaction_date,
                 related_transaction=transaction
             )
-            cash_account.update_balance(dividend_amount)
+
+        # After creating all cash transactions, recalculate balances
+        cash_account.recalculate_balances()
 
     def perform_destroy(self, instance):
         """Override to handle cash transaction cleanup when deleting a transaction"""
@@ -681,31 +681,48 @@ class TransactionViewSet(viewsets.ModelViewSet):
         # Store the transaction details for logging
         transaction_type = instance.transaction_type
         security_symbol = instance.security.symbol
+        transaction_created_at = instance.created_at
+
+        # Store cash account for later recalculation
+        cash_account = instance.portfolio.cash_account
 
         # Check if there's a related cash transaction
         if hasattr(instance, 'cash_transaction'):
             cash_transaction = instance.cash_transaction
-            cash_account = cash_transaction.cash_account
 
-            # Reverse the cash balance change
-            # The amount in cash_transaction is negative for outflows (BUY)
-            # and positive for inflows (SELL, DIVIDEND)
-            reversal_amount = -cash_transaction.amount
+            # If this was a BUY transaction, we need to check for and delete any auto-deposits FIRST
+            if transaction_type == 'BUY':
+                # Look for auto-deposits created around the same time
+                from datetime import timedelta
 
-            # Update the cash balance
-            cash_account.update_balance(reversal_amount)
+                # Define a time window (1 minute before and after)
+                time_window_start = transaction_created_at - timedelta(minutes=1)
+                time_window_end = transaction_created_at + timedelta(minutes=1)
 
-            # Delete the cash transaction
-            # This will happen automatically due to CASCADE when we delete the transaction
-            # but we can do it explicitly for clarity
+                auto_deposits = CashTransaction.objects.filter(
+                    cash_account=cash_account,
+                    transaction_type='DEPOSIT',
+                    is_auto_deposit=True,
+                    created_at__gte=time_window_start,
+                    created_at__lte=time_window_end,
+                    description__icontains=security_symbol
+                )
+
+                # Delete auto-deposits
+                for auto_deposit in auto_deposits:
+                    logger.info(f"Deleting auto-deposit of {auto_deposit.amount} for {security_symbol}")
+                    auto_deposit.delete()
+
+            # Delete the related cash transaction manually since it's SET_NULL, not CASCADE
             cash_transaction.delete()
 
-            # Log the action
-            print(f"Deleted {transaction_type} transaction for {security_symbol}, "
-                  f"reversed cash amount: {reversal_amount}")
+            logger.info(f"Deleted {transaction_type} cash transaction for {security_symbol}")
 
         # Delete the transaction itself
         super().perform_destroy(instance)
+
+        # Recalculate all balances after deletion
+        cash_account.recalculate_balances()
 
 
 class AssetCategoryViewSet(viewsets.ModelViewSet):
@@ -745,15 +762,21 @@ class CashTransactionViewSet(viewsets.ModelViewSet):
         return queryset.order_by('-transaction_date')
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        """
+        Create cash transaction and recalculate balances
+        """
+        # Save with the current user
+        cash_transaction = serializer.save(user=self.request.user)
+
+        # Recalculate all balances
+        cash_transaction.cash_account.recalculate_balances()
 
     def destroy(self, request, *args, **kwargs):
         """
-        Override destroy to:
-        1. Prevent deletion of auto-generated cash transactions
-        2. Update cash account balance when deleting manual transactions
+        Override destroy to recalculate balances after deletion
         """
         instance = self.get_object()
+        cash_account = instance.cash_account
 
         # Check if this cash transaction is related to a security transaction
         if instance.related_transaction:
@@ -763,34 +786,25 @@ class CashTransactionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Store the cash account and transaction details before deletion
-        cash_account = instance.cash_account
-        transaction_amount = instance.amount
-        transaction_type = instance.transaction_type
-
-        # Log the operation for debugging
-        logger.info(f"Deleting cash transaction: {transaction_type} of {transaction_amount}")
-        logger.info(f"Current cash balance before deletion: {cash_account.balance}")
-
-        # **CRITICAL FIX: Update the cash account balance by reversing the transaction**
-        reversal_amount = -transaction_amount
-
-        logger.info(f"Applying reversal amount: {reversal_amount}")
-
-        # Update the cash account balance
-        cash_account.update_balance(reversal_amount)
-
-        logger.info(f"New cash balance after reversal: {cash_account.balance}")
-
         # Delete the transaction
         response = super().destroy(request, *args, **kwargs)
 
-        # Return success response with updated balance info
+        # Recalculate balances after deletion
+        cash_account.recalculate_balances()
+
         return Response({
-            'message': f'{transaction_type} transaction deleted successfully',
-            'new_balance': float(cash_account.balance),
-            'reversed_amount': float(reversal_amount)
+            'message': 'Transaction deleted successfully',
+            'new_balance': float(cash_account.balance)
         }, status=status.HTTP_200_OK)
+
+    def perform_update(self, serializer):
+        """
+        Update cash transaction and recalculate balances
+        """
+        cash_transaction = serializer.save()
+
+        # Recalculate all balances
+        cash_transaction.cash_account.recalculate_balances()
 
 
 class UserPreferencesViewSet(viewsets.ModelViewSet):

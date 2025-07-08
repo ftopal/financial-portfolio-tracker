@@ -67,13 +67,13 @@ class TransactionSerializer(serializers.ModelSerializer):
     exchange_rate = serializers.DecimalField(
         max_digits=20,
         decimal_places=8,
-        required=False,  # Optional - will auto-calculate if not provided
+        required=False,
         allow_null=True
     )
     base_amount = serializers.DecimalField(
         max_digits=20,
         decimal_places=2,
-        required=False,  # Optional - will auto-calculate if not provided
+        required=False,
         allow_null=True
     )
 
@@ -86,6 +86,33 @@ class TransactionSerializer(serializers.ModelSerializer):
             'created_at', 'currency', 'exchange_rate', 'base_amount', 'split_ratio'
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']
+
+    def validate(self, data):
+        """Add validation for dividend transactions with decimal shares"""
+        transaction_type = data.get('transaction_type')
+
+        # Handle dividend per share calculation and rounding
+        if transaction_type == 'DIVIDEND':
+            quantity = data.get('quantity')
+            price = data.get('price')
+            dividend_per_share = data.get('dividend_per_share')
+
+            # If dividend_per_share is not provided but price (total dividend) is
+            if not dividend_per_share and price and quantity:
+                if quantity > 0:
+                    # Calculate and round to 4 decimal places to match model field
+                    calculated_dps = price / quantity
+                    data['dividend_per_share'] = Decimal(str(round(float(calculated_dps), 4)))
+                else:
+                    raise serializers.ValidationError({
+                        'quantity': 'Quantity must be greater than 0 for dividend transactions.'
+                    })
+
+            # If dividend_per_share is provided, ensure it's properly rounded
+            elif dividend_per_share:
+                data['dividend_per_share'] = Decimal(str(round(float(dividend_per_share), 4)))
+
+        return data
 
     def create(self, validated_data):
         # Get currency from validated data or use security's currency
@@ -149,6 +176,12 @@ class TransactionSerializer(serializers.ModelSerializer):
                     total_amount = (quantity * price) + fees
                 elif transaction_type == 'SELL':
                     total_amount = (quantity * price) - fees
+                elif transaction_type == 'DIVIDEND':
+                    # For dividends, properly handle the calculation
+                    if 'dividend_per_share' in validated_data:
+                        total_amount = (quantity * validated_data['dividend_per_share']) - fees
+                    else:
+                        total_amount = (validated_data.get('price', 0) or 0) - fees
                 else:
                     total_amount = quantity * price
 
@@ -157,7 +190,7 @@ class TransactionSerializer(serializers.ModelSerializer):
                     validated_data['exchange_rate'] = calculated_rate
 
             else:
-                # NO USER OVERRIDE - USE AUTOMATIC CALCULATION (existing logic)
+                # NO USER OVERRIDE - USE AUTOMATIC CALCULATION
                 from .services.currency_service import CurrencyService
                 from django.utils import timezone
 
@@ -184,6 +217,12 @@ class TransactionSerializer(serializers.ModelSerializer):
                         total_amount = (quantity * price) + fees
                     elif transaction_type == 'SELL':
                         total_amount = (quantity * price) - fees
+                    elif transaction_type == 'DIVIDEND':
+                        # For dividends, fees should be subtracted
+                        if 'dividend_per_share' in validated_data:
+                            total_amount = (quantity * validated_data['dividend_per_share']) - fees
+                        else:
+                            total_amount = (validated_data.get('price', 0) or 0) - fees
                     else:
                         total_amount = quantity * price
 

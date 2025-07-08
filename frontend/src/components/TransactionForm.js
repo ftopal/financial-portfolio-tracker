@@ -484,23 +484,25 @@ const TransactionForm = ({
     setError('');
 
     try {
-      const currentPortfolio = portfolioData || portfolio;
-      const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
-
+      // Build the transaction data
       const transactionData = {
         portfolio: portfolioId,
         security: selectedSecurity.id,
         transaction_type: formData.transaction_type,
-        transaction_date: formData.transaction_date,
         quantity: parseFloat(formData.quantity),
         price: parseFloat(formData.price),
-        fees: parseFloat(formData.fees) || 0,
-        notes: formData.notes || '',
+        fees: parseFloat(formData.fees || 0),
+        transaction_date: formData.transaction_date,
+        notes: formData.notes,
         currency: formData.currency,
 
-        // Include custom exchange rate and base amount if different currency
-        ...(formData.currency !== portfolioCurrency && {
-          exchange_rate: parseFloat(exchangeRateField),
+        // Include custom exchange rate and base amount if provided
+        ...(isExchangeRateManual && exchangeRateField && {
+          exchange_rate: parseFloat(exchangeRateField)
+        }),
+
+        // Include manual base amount if provided (regardless of exchange rate)
+        ...(isBaseAmountManual && baseAmountField && {
           base_amount: parseFloat(baseAmountField)
         }),
 
@@ -511,9 +513,13 @@ const TransactionForm = ({
 
         // Handle dividend per share for DIVIDEND transactions
         ...(formData.transaction_type === 'DIVIDEND' && {
-          dividend_per_share: parseFloat(formData.price) / parseFloat(formData.quantity)  // ✅ CORRECT: Calculate per-share amount
+          // Calculate and round to 4 decimal places to match backend model
+          dividend_per_share: Math.round((parseFloat(formData.price) / parseFloat(formData.quantity)) * 10000) / 10000
         })
       };
+
+      // Log the data being sent for debugging
+      console.log('Sending transaction data:', transactionData);
 
       let response;
       if (transaction) {
@@ -552,7 +558,30 @@ const TransactionForm = ({
 
     } catch (err) {
       console.error('Error saving transaction:', err);
-      setError(err.response?.data?.detail || 'Failed to save transaction');
+
+      // Enhanced error handling for better debugging
+      if (err.response?.data) {
+        console.error('Error response data:', err.response.data);
+
+        // Handle specific field errors
+        if (err.response.data.dividend_per_share) {
+          setError(`Dividend per share error: ${err.response.data.dividend_per_share}`);
+        } else if (err.response.data.detail) {
+          setError(err.response.data.detail);
+        } else if (err.response.data.error) {
+          setError(err.response.data.error);
+        } else {
+          // Try to extract any field-specific errors
+          const fieldErrors = Object.entries(err.response.data)
+            .filter(([key, value]) => typeof value === 'string' || Array.isArray(value))
+            .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+            .join('; ');
+
+          setError(fieldErrors || 'Failed to save transaction');
+        }
+      } else {
+        setError('Failed to save transaction. Please check your input.');
+      }
     } finally {
       setLoading(false);
     }
@@ -575,6 +604,10 @@ const TransactionForm = ({
 
   const currentPortfolio = portfolioData || portfolio;
   const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
+  const dividendPerShare = formData.transaction_type === 'DIVIDEND' && formData.price && formData.quantity
+    ? Math.round((parseFloat(formData.price) / parseFloat(formData.quantity)) * 10000) / 10000
+    : null;
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>

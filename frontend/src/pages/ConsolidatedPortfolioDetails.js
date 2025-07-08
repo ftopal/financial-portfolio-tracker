@@ -618,7 +618,7 @@ const ConsolidatedPortfolioDetails = () => {
                                             </Typography>
                                           )}
                                           <Typography variant="caption" display="block" color="info.main" fontWeight="medium">
-                                            Dividend Per Share
+                                            DPS
                                           </Typography>
                                         </Box>
                                       ) : (
