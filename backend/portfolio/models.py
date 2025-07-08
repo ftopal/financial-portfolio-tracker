@@ -748,33 +748,51 @@ class PortfolioCashAccount(models.Model):
         """
         from decimal import Decimal
 
-        # Get all transactions ordered by transaction date and creation time
-        transactions = self.transactions.order_by('transaction_date', 'created_at')
+        try:
+            # Get all transactions ordered by transaction date and creation time
+            transactions = self.transactions.order_by('transaction_date', 'created_at')
 
-        running_balance = Decimal('0')
+            running_balance = Decimal('0')
 
-        # Use bulk_update to avoid triggering signals
-        transactions_to_update = []
+            # Use bulk_update to avoid triggering signals
+            transactions_to_update = []
 
-        for transaction in transactions:
-            running_balance += transaction.amount
+            for transaction in transactions:
+                running_balance += transaction.amount
 
-            # Check if balance_after needs updating
-            if transaction.balance_after != running_balance:
-                transaction.balance_after = running_balance
-                transactions_to_update.append(transaction)
+                # Check if balance_after needs updating
+                if transaction.balance_after != running_balance:
+                    transaction.balance_after = running_balance
+                    transactions_to_update.append(transaction)
 
-        # Bulk update all transactions at once (doesn't trigger signals)
-        if transactions_to_update:
-            # Use the model class from the transaction instance
-            transaction.__class__.objects.bulk_update(transactions_to_update, ['balance_after'])
+            # Bulk update all transactions at once (doesn't trigger signals)
+            if transactions_to_update:
+                # Use the model class from the transaction instance
+                transaction.__class__.objects.bulk_update(transactions_to_update, ['balance_after'])
 
-        # Update the cash account's current balance
-        if self.balance != running_balance:
-            self.balance = running_balance
-            self.save(update_fields=['balance'])
+            # Update the cash account's current balance
+            if self.balance != running_balance:
+                self.balance = running_balance
+                # Use a try-catch to handle the case where the instance might be in the process of being deleted
+                try:
+                    self.save(update_fields=['balance'])
+                except Exception as e:
+                    # Log the error but don't re-raise it to avoid blocking deletion processes
+                    logger.warning(f"Failed to save cash account balance during recalculation: {e}")
+                    # If save with update_fields fails, it might be because the object is being deleted
+                    # In that case, we can skip updating the balance since it won't matter
 
-        return running_balance
+            return running_balance
+
+        except Exception as e:
+            # Log any errors that occur during balance recalculation
+            logger.error(f"Error during balance recalculation for cash account {self.id}: {e}")
+            # Re-raise the exception unless it's a specific database error that indicates deletion
+            if "did not affect any rows" in str(e) or "DoesNotExist" in str(e):
+                logger.info(f"Skipping balance recalculation for cash account {self.id} - likely being deleted")
+                return self.balance
+            else:
+                raise
 
     def get_balance_verification(self):
         """
@@ -887,12 +905,34 @@ def recalculate_on_delete(sender, instance, **kwargs):
     """
     Recalculate balances whenever a cash transaction is deleted
     """
-    # Store the cash account before deletion
-    cash_account = instance.cash_account
+    # Store the cash account ID before deletion
+    cash_account_id = instance.cash_account_id
+
+    def safe_recalculate():
+        """
+        Safely recalculate balances only if the cash account still exists
+        """
+        try:
+            # Import here to avoid circular imports
+            from .models import PortfolioCashAccount
+
+            # Check if the cash account still exists in the database
+            # This prevents the error when the entire portfolio (and cash account) is being deleted
+            if PortfolioCashAccount.objects.filter(id=cash_account_id).exists():
+                cash_account = PortfolioCashAccount.objects.get(id=cash_account_id)
+                cash_account.recalculate_balances()
+                logger.info(f"Recalculated balances for cash account {cash_account_id} after transaction deletion")
+            else:
+                logger.info(
+                    f"Skipped balance recalculation - cash account {cash_account_id} no longer exists (likely due to portfolio deletion)")
+        except Exception as e:
+            # Log the error but don't raise it to prevent blocking the deletion process
+            logger.warning(
+                f"Failed to recalculate balances for cash account {cash_account_id} after transaction deletion: {e}")
 
     # Use Django's transaction.on_commit to ensure this runs after the delete is committed
     from django.db import transaction
-    transaction.on_commit(lambda: cash_account.recalculate_balances())
+    transaction.on_commit(safe_recalculate)
 
 
 class UserPreferences(models.Model):
