@@ -175,6 +175,53 @@ class Portfolio(models.Model):
                 print(f"  Total cost after dividend: {holdings[security_id]['total_cost_base_currency']}")
                 print(f"  Quantity: {holdings[security_id]['quantity']}")
 
+
+            elif transaction.transaction_type == 'SPLIT':
+                # Handle stock splits correctly
+                if transaction.split_ratio:
+                    try:
+                        # Parse split ratio (e.g., "4:1" means 4 new shares for 1 old share)
+                        ratio_parts = transaction.split_ratio.split(':')
+                        if len(ratio_parts) == 2:
+                            new_shares = Decimal(str(ratio_parts[0]))
+                            old_shares = Decimal(str(ratio_parts[1]))
+
+                            if old_shares > 0:
+                                # Calculate the split multiplier
+                                split_multiplier = new_shares / old_shares
+                                # CORRECT LOGIC:
+                                # holdings[security_id]['quantity'] contains quantity from all previous transactions
+                                # This is the quantity we had BEFORE this split
+                                quantity_before_split = holdings[security_id]['quantity']
+
+                                # Apply the split: multiply existing quantity by split ratio
+                                new_total_quantity = quantity_before_split * split_multiplier
+                                holdings[security_id]['quantity'] = new_total_quantity
+
+                                # CRITICAL: Adjust the buy lots for FIFO tracking
+                                # All historical buy lots need to be adjusted for the split
+                                for lot in holdings[security_id]['buy_lots']:
+                                    lot['quantity'] *= split_multiplier
+                                    lot['remaining'] *= split_multiplier
+                                    lot['price'] /= split_multiplier  # Price per share decreases proportionally
+
+                                # Debug logging
+                                print(f"SPLIT: {transaction.security.symbol} {transaction.split_ratio}")
+                                print(f"  Quantity before split: {quantity_before_split}")
+                                print(f"  Split multiplier: {split_multiplier}")
+                                print(f"  New total quantity: {new_total_quantity}")
+                                print(f"  Additional shares created: {new_total_quantity - quantity_before_split}")
+
+                                # NOTE: total_cost and total_cost_base_currency remain unchanged
+                                # because the total invested amount doesn't change in a split
+
+
+                    except (ValueError, IndexError, ZeroDivisionError) as e:
+                        print(f"Error parsing split ratio {transaction.split_ratio}: {e}")
+                        # If parsing fails, fall back to simply adding the additional shares
+                        # This maintains backward compatibility but may not be accurate
+                        holdings[security_id]['quantity'] += transaction.quantity
+
         # Calculate current metrics for each holding
         for security_id, data in holdings.items():
             if data['quantity'] > 0:

@@ -1115,6 +1115,12 @@ def portfolio_holdings_consolidated(request, portfolio_id):
                 else:
                     dividend_amount = transaction.price or Decimal('0')
                 total_cost_security_currency -= dividend_amount
+            elif transaction.transaction_type == 'SPLIT':
+                # For SPLIT transactions in cost calculations:
+                # Splits don't change the total cost, but they do affect the per-share cost basis
+                # The total_cost_security_currency should remain the same
+                # The average cost will be recalculated later by dividing by the new quantity
+                pass  # No adjustment needed to total cost
 
         # Calculate average cost in security currency
         if data['quantity'] > 0:
