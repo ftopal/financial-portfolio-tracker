@@ -98,7 +98,9 @@ const ConsolidatedPortfolioDetails = () => {
       name: asset.name,
       current_price: asset.current_price,
       security_type: asset.asset_type,
-      total_quantity: asset.total_quantity
+      total_quantity: asset.total_quantity,
+      // 🔥 CRITICAL FIX: Include currency information from the asset
+      currency: asset.current_price_currency || asset.security_currency || 'USD'
     });
 
     setShowTransactionForm(true);
@@ -125,7 +127,8 @@ const ConsolidatedPortfolioDetails = () => {
         symbol: asset.symbol,
         name: asset.name,
         current_price: asset.current_price,
-        currency: asset.current_price_currency || transaction.currency
+        // 🔥 CRITICAL FIX: Use the correct currency hierarchy
+        currency: asset.current_price_currency || asset.security_currency || transaction.currency || 'USD'
       },
       transaction_type: transaction.transaction_type,
       quantity: transaction.quantity,
@@ -144,7 +147,8 @@ const ConsolidatedPortfolioDetails = () => {
       symbol: asset.symbol,
       name: asset.name,
       current_price: asset.current_price,
-      currency: asset.current_price_currency || transaction.currency
+      // 🔥 CRITICAL FIX: Include currency information
+      currency: asset.current_price_currency || asset.security_currency || transaction.currency || 'USD'
     });
     setShowTransactionForm(true);
   };
