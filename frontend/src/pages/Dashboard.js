@@ -97,6 +97,11 @@ const Dashboard = () => {
       let totalGainLoss = 0;
       let totalCash = 0;
 
+      // Helper function to round amounts to 8 decimal places
+      const roundAmount = (amount) => {
+        return Math.round(amount * 100000000) / 100000000;
+      };
+
       // Convert each portfolio's values to display currency
       for (const portfolio of portfolios) {
         const currency = portfolio.base_currency || 'USD';
@@ -122,27 +127,30 @@ const Dashboard = () => {
           totalCash += cash;
         } else {
           try {
-            // Convert total portfolio value (including cash)
+            // Convert total portfolio value (including cash) - with rounding
+            const roundedTotalValue = roundAmount(portfolioTotalValue);
             const response = await currencyAPI.convert({
-              amount: portfolioTotalValue,
+              amount: roundedTotalValue,
               from_currency: currency,
               to_currency: displayCurrency
             });
 
-            console.log(`Converting ${portfolioTotalValue} ${currency} to ${displayCurrency}:`, response.data);
+            console.log(`Converting ${roundedTotalValue} ${currency} to ${displayCurrency}:`, response.data);
             const convertedValue = parseFloat(response.data.converted_amount || portfolioTotalValue);
 
-            // Convert gain/loss separately
+            // Convert gain/loss separately - with rounding
+            const roundedGainLoss = roundAmount(gainLoss);
             const gainLossResponse = await currencyAPI.convert({
-              amount: gainLoss,
+              amount: roundedGainLoss,
               from_currency: currency,
               to_currency: displayCurrency
             });
             const convertedGainLoss = parseFloat(gainLossResponse.data.converted_amount || gainLoss);
 
-            // Convert cash separately
+            // Convert cash separately - with rounding
+            const roundedCash = roundAmount(cash);
             const cashResponse = await currencyAPI.convert({
-              amount: cash,
+              amount: roundedCash,
               from_currency: currency,
               to_currency: displayCurrency
             });
@@ -162,6 +170,16 @@ const Dashboard = () => {
         }
       }
 
+      setConvertedTotals({
+        totalValue,
+        totalGainLoss,
+        totalCash
+      });
+
+      console.log('Conversion completed:', { totalValue, totalGainLoss, totalCash });
+    } catch (err) {
+      console.error('Error in calculateConvertedTotals:', err);
+      // Fallback to original calculation without conversion
       const totals = portfolios.reduce((acc, portfolio) => {
         acc.totalValue += parseFloat(portfolio.total_value_with_cash || portfolio.total_value || 0);
         acc.totalGainLoss += parseFloat(portfolio.total_gain_loss || 0);
@@ -207,11 +225,17 @@ const Dashboard = () => {
     const conversions = {};
     const totalsByCurrency = calculateTotalsByCurrency();
 
+    // Helper function to round amounts to 8 decimal places
+    const roundAmount = (amount) => {
+      return Math.round(amount * 100000000) / 100000000;
+    };
+
     for (const currency of Object.keys(totalsByCurrency)) {
       if (currency !== displayCurrency) {
         try {
+          const roundedAmount = roundAmount(totalsByCurrency[currency].totalValue);
           const response = await currencyAPI.convert({
-            amount: totalsByCurrency[currency].totalValue,
+            amount: roundedAmount,
             from_currency: currency,
             to_currency: displayCurrency
           });
