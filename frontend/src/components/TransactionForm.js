@@ -22,7 +22,7 @@ import {
   Chip
 } from '@mui/material';
 import InfoIcon from '@mui/icons-material/Info';
-import { Search as SearchIcon, TrendingUp } from '@mui/icons-material';
+import { Search as SearchIcon, TrendingUp, AttachMoney as AttachMoneyIcon } from '@mui/icons-material';
 import CurrencySelector from './CurrencySelector';
 import CurrencyDisplay from './CurrencyDisplay';
 import api, { currencyAPI } from '../services/api';
@@ -57,6 +57,10 @@ const TransactionForm = ({
   const [exchangeRate, setExchangeRate] = useState(null);
   const [convertedAmount, setConvertedAmount] = useState(null);
   const [convertedAmountWithFees, setConvertedAmountWithFees] = useState(null);
+
+  const [autoDepositInfo, setAutoDepositInfo] = useState(null);
+  const [checkingAutoDeposit, setCheckingAutoDeposit] = useState(false);
+  const [showAutoDepositConfirm, setShowAutoDepositConfirm] = useState(false);
 
   // Security search states
   const [searchOpen, setSearchOpen] = useState(false);
@@ -402,6 +406,240 @@ const TransactionForm = ({
     fetchExchangeRate
   ]);
 
+  const checkAutoDepositNeeded = useCallback(async () => {
+    // Only check for BUY transactions with valid amounts
+    if (formData.transaction_type !== 'BUY' || !formData.quantity || !formData.price || !selectedSecurity) {
+      setAutoDepositInfo(null);
+      return;
+    }
+
+    const quantity = parseFloat(formData.quantity || 0);
+    const price = parseFloat(formData.price || 0);
+    const fees = parseFloat(formData.fees || 0);
+
+    if (quantity <= 0 || price <= 0) {
+      setAutoDepositInfo(null);
+      return;
+    }
+
+    // Calculate total cost in portfolio currency
+    let totalCost = (quantity * price) + fees;
+
+    // If transaction is in different currency, convert to portfolio currency
+    if (convertedAmountWithFees !== null) {
+      totalCost = convertedAmountWithFees;
+    }
+
+    try {
+      setCheckingAutoDeposit(true);
+      const response = await api.portfolios.checkAutoDeposit(portfolioId, {
+        transaction_type: formData.transaction_type,
+        total_cost: totalCost
+      });
+
+      setAutoDepositInfo(response.data);
+    } catch (error) {
+      console.error('Error checking auto-deposit:', error);
+      setAutoDepositInfo(null);
+    } finally {
+      setCheckingAutoDeposit(false);
+    }
+  }, [
+    formData.transaction_type,
+    formData.quantity,
+    formData.price,
+    formData.fees,
+    selectedSecurity,
+    portfolioId,
+    convertedAmountWithFees
+  ]);
+
+  // Add this function to handle auto-deposit confirmation
+  const handleAutoDepositConfirm = () => {
+    setShowAutoDepositConfirm(false);
+    // Continue with transaction creation
+    handleSubmit({ preventDefault: () => {} });
+  };
+
+  // Add this function to handle auto-deposit cancellation
+  const handleAutoDepositCancel = () => {
+    setShowAutoDepositConfirm(false);
+  };
+
+  // Add this component for the Transaction Summary with auto-deposit warning
+  const TransactionSummaryWithAutoDeposit = () => {
+    const currentPortfolio = portfolioData || portfolio;
+    const portfolioCurrency = currentPortfolio?.base_currency || currentPortfolio?.currency || 'USD';
+
+    return (
+      <Box sx={{ mt: 3 }}>
+        <Typography variant="h6" gutterBottom>
+          Transaction Summary
+        </Typography>
+
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+          <Typography>Subtotal:</Typography>
+          <Typography>
+            <CurrencyDisplay
+              amount={totalAmount}
+              currency={formData.currency}
+              showCode={true}
+            />
+          </Typography>
+        </Box>
+
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+          <Typography>Fees:</Typography>
+          <Typography>
+            <CurrencyDisplay
+              amount={formData.fees || 0}
+              currency={formData.currency}
+              showCode={true}
+            />
+          </Typography>
+        </Box>
+
+         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+          <Typography fontWeight="bold">Total:</Typography>
+          <Typography fontWeight="bold">
+            <CurrencyDisplay
+              amount={totalWithFees}
+              currency={formData.currency}
+              showCode={true}
+            />
+          </Typography>
+        </Box>
+
+        {/* Auto-deposit warning */}
+        {checkingAutoDeposit && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Box display="flex" alignItems="center" gap={1}>
+              <CircularProgress size={16} />
+              <Typography variant="body2">Checking cash balance...</Typography>
+            </Box>
+          </Alert>
+        )}
+
+        {autoDepositInfo && autoDepositInfo.auto_deposit_needed && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <Typography variant="body2" fontWeight="bold" gutterBottom>
+              Auto-Deposit Required
+            </Typography>
+            <Typography variant="body2" gutterBottom>
+              Current cash balance: <strong>{formatCurrency(autoDepositInfo.current_balance, autoDepositInfo.currency)}</strong>
+            </Typography>
+            <Typography variant="body2" gutterBottom>
+              Transaction total: <strong>{formatCurrency(autoDepositInfo.total_cost, autoDepositInfo.currency)}</strong>
+            </Typography>
+            <Typography variant="body2" gutterBottom>
+              Shortfall: <strong>{formatCurrency(autoDepositInfo.shortfall, autoDepositInfo.currency)}</strong>
+            </Typography>
+            <Typography variant="body2" color="warning.main" fontWeight="bold">
+              An auto-deposit of <strong>{formatCurrency(autoDepositInfo.deposit_amount, autoDepositInfo.currency)}</strong> will be created to cover this transaction.
+            </Typography>
+          </Alert>
+        )}
+
+        {autoDepositInfo && autoDepositInfo.error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            <Typography variant="body2" fontWeight="bold" gutterBottom>
+              Insufficient Cash Balance
+            </Typography>
+            <Typography variant="body2">
+              {autoDepositInfo.message}
+            </Typography>
+          </Alert>
+        )}
+
+        {/* Exchange rate and converted amount display */}
+        {formData.currency !== portfolioCurrency && formData.transaction_type !== 'SPLIT' && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            {exchangeRate && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Exchange Rate:
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  1 {formData.currency} = {exchangeRate.toFixed(4)} {portfolioCurrency}
+                </Typography>
+              </Box>
+            )}
+            {convertedAmountWithFees !== null && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="body2" fontWeight="bold">
+                  Total in {portfolioCurrency}:
+                </Typography>
+                <Typography variant="body2" fontWeight="bold" color="primary">
+                  <CurrencyDisplay
+                    amount={convertedAmountWithFees}
+                    currency={portfolioCurrency}
+                    showCode={true}
+                  />
+                </Typography>
+              </Box>
+            )}
+          </>
+        )}
+      </Box>
+    );
+  };
+
+  const AutoDepositConfirmDialog = () => {
+    if (!autoDepositInfo || !autoDepositInfo.auto_deposit_needed) return null;
+
+    return (
+      <Dialog open={showAutoDepositConfirm} onClose={handleAutoDepositCancel} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box display="flex" alignItems="center" gap={1}>
+            <AttachMoneyIcon color="warning" />
+            <Typography variant="h6">Auto-Deposit Required</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" gutterBottom>
+            Your current cash balance is insufficient for this transaction. An automatic deposit will be created.
+          </Typography>
+
+          <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+            <Typography variant="body2" gutterBottom>
+              <strong>Current Balance:</strong> {formatCurrency(autoDepositInfo.current_balance, autoDepositInfo.currency)}
+            </Typography>
+            <Typography variant="body2" gutterBottom>
+              <strong>Transaction Total:</strong> {formatCurrency(autoDepositInfo.total_cost, autoDepositInfo.currency)}
+            </Typography>
+            <Typography variant="body2" gutterBottom>
+              <strong>Shortfall:</strong> {formatCurrency(autoDepositInfo.shortfall, autoDepositInfo.currency)}
+            </Typography>
+            <Typography variant="body2" color="warning.main" fontWeight="bold">
+              <strong>Auto-Deposit Amount:</strong> {formatCurrency(autoDepositInfo.deposit_amount, autoDepositInfo.currency)}
+            </Typography>
+          </Box>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+            Mode: {autoDepositInfo.auto_deposit_mode === 'EXACT' ? 'Deposit exact amount needed' : 'Deposit only shortfall'}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleAutoDepositCancel}>Cancel</Button>
+          <Button onClick={handleAutoDepositConfirm} variant="contained" color="warning">
+            Create Auto-Deposit & Transaction
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  };
+
+  // Add this useEffect to trigger auto-deposit check when values change
+  useEffect(() => {
+    // Debounce the check to avoid too many API calls
+    const timeoutId = setTimeout(() => {
+      checkAutoDepositNeeded();
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [checkAutoDepositNeeded]);
+
   const handleExchangeRateChange = (event) => {
     const value = event.target.value;
     setExchangeRateField(value);
@@ -480,6 +718,13 @@ const TransactionForm = ({
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    // If auto-deposit is needed, show confirmation dialog first
+    if (autoDepositInfo && autoDepositInfo.auto_deposit_needed && !showAutoDepositConfirm) {
+      setShowAutoDepositConfirm(true);
+      return;
+    }
+
     setLoading(true);
     setError('');
 
@@ -659,37 +904,36 @@ const TransactionForm = ({
                       // Auto-fill quantity for dividends
                       quantity: prev.transaction_type === 'DIVIDEND' && holdingQuantity > 0
                         ? holdingQuantity.toString()
-                        : prev.quantity
+                        : prev.quantity,
                     }));
                   }
-                }}
-                inputValue={searchInput}
-                onInputChange={(event, newInputValue) => {
-                  setSearchInput(newInputValue);
                 }}
                 options={searchOptions}
                 getOptionLabel={(option) => `${option.symbol} - ${option.name}`}
                 renderOption={(props, option) => (
                   <Box component="li" {...props}>
                     <Box>
-                      <Typography variant="body1">
-                        {option.symbol} - {option.name}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {option.exchange} | {option.currency} | Current: {option.current_price}
+                      <Typography variant="body2" fontWeight="bold">{option.symbol}</Typography>
+                      <Typography variant="caption" color="text.secondary">{option.name}</Typography>
+                      <Typography variant="caption" display="block" color="text.secondary">
+                        {option.current_price ? `Price: ${formatCurrency(option.current_price, option.currency)}` : 'No price data'}
                       </Typography>
                     </Box>
                   </Box>
                 )}
                 loading={searchLoading}
-                fullWidth
+                onInputChange={(event, value) => setSearchInput(value)}
                 renderInput={(params) => (
                   <TextField
                     {...params}
-                    placeholder="Search by symbol or name..."
+                    placeholder="Search by symbol or name (e.g., AAPL, Apple)"
                     InputProps={{
                       ...params.InputProps,
-                      startAdornment: <SearchIcon color="action" sx={{ mr: 1 }} />,
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <SearchIcon />
+                        </InputAdornment>
+                      ),
                       endAdornment: (
                         <>
                           {searchLoading ? <CircularProgress color="inherit" size={20} /> : null}
@@ -858,12 +1102,10 @@ const TransactionForm = ({
                 helperText={
                   formData.transaction_type === 'DIVIDEND'
                     ? formData.quantity && formData.price
-                      ? <span>Dividend per share: <CurrencyDisplay
-                          amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
-                          currency={formData.currency}
-                          showCode={false}
-                        /></span>
+                      ? `Dividend per share: ${formatCurrency(dividendPerShare, formData.currency)}`
                       : 'Enter the total dividend amount received'
+                    : formData.transaction_type === 'SPLIT'
+                    ? 'Stock splits have no monetary value'
                     : `Enter price in ${formData.currency}`
                 }
               />
@@ -874,249 +1116,77 @@ const TransactionForm = ({
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 2 }}>
             <CurrencySelector
               value={formData.currency}
-              onChange={(value) => {
-                // Allow currency changes for new transactions, but be careful with edited transactions
-                if (!transaction || (transaction && window.confirm('Changing currency will reset exchange rate calculations. Continue?'))) {
-                  setFormData({ ...formData, currency: value });
-                  // Reset exchange rate fields when currency changes
-                  setExchangeRateField('');
-                  setBaseAmountField('');
-                  setIsExchangeRateManual(false);
-                  setIsBaseAmountManual(false);
-                }
-              }}
-              fullWidth
+              onChange={(currency) => setFormData({ ...formData, currency })}
               label="Transaction Currency"
-              helperText={
-                formData.currency !== portfolioCurrency
-                  ? `Will be converted to ${portfolioCurrency} (portfolio currency)`
-                  : `Same as portfolio currency`
-              }
+              required
             />
 
-            {formData.transaction_type !== 'SPLIT' && (
-              <TextField
-                type="number"
-                label={`Fees (${formData.currency})`}
-                value={formData.fees}
-                onChange={(e) => setFormData({ ...formData, fees: e.target.value })}
-                inputProps={{ step: "0.01", min: "0" }}
-                fullWidth
-                helperText={
-                  formData.transaction_type === 'DIVIDEND'
-                    ? "Fees will be deducted from dividend. Net amount will be added to cash."
-                    : null
-                }
-              />
-            )}
-          </Box>
-
-          {/* Exchange Rate Field - Manual override */}
-          {formData.currency !== portfolioCurrency && (
             <TextField
               type="number"
-              label={`Exchange Rate (1 ${formData.currency} = ? ${portfolioCurrency})`}
-              value={exchangeRateField}
-              onChange={handleExchangeRateChange}
-              inputProps={{ step: "0.0001", min: "0" }}
-              fullWidth
-              sx={{ mb: 2 }}
-              helperText={autoExchangeRate ? `Historical rate: ${autoExchangeRate.toFixed(4)}` : ''}
-            />
-          )}
-
-          {/* Total Cost in Portfolio Currency Field - Manual override */}
-          {formData.currency !== portfolioCurrency && formData.transaction_type !== 'SPLIT' && (
-            <TextField
-              type="number"
-              label={`Total Cost (${portfolioCurrency})`}
-              value={baseAmountField}
-              onChange={handleBaseAmountChange}
+              label={`Fees (${formData.currency})`}
+              value={formData.fees}
+              onChange={(e) => setFormData({ ...formData, fees: e.target.value })}
               inputProps={{ step: "0.01", min: "0" }}
               fullWidth
-              sx={{ mb: 2 }}
-              helperText={autoBaseAmount ? `Auto calculated: ${formatCurrency(autoBaseAmount, portfolioCurrency)}` : ''}
+              helperText={`Enter fees in ${formData.currency}`}
             />
+          </Box>
+
+          {/* Manual Exchange Rate and Base Amount Override */}
+          {formData.currency !== portfolioCurrency && formData.transaction_type !== 'SPLIT' && (
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Currency Conversion Override (Optional)
+              </Typography>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+                <TextField
+                  type="number"
+                  label={`Exchange Rate (1 ${formData.currency} = ? ${portfolioCurrency})`}
+                  value={exchangeRateField}
+                  onChange={handleExchangeRateChange}
+                  inputProps={{ step: "0.00000001", min: "0" }}
+                  fullWidth
+                  helperText={
+                    autoExchangeRate
+                      ? `Historical rate: ${autoExchangeRate.toFixed(4)}`
+                      : 'Leave blank to use historical rate'
+                  }
+                />
+
+                <TextField
+                  type="number"
+                  label={`Total Cost (${portfolioCurrency})`}
+                  value={baseAmountField}
+                  onChange={handleBaseAmountChange}
+                  inputProps={{ step: "0.01", min: "0" }}
+                  fullWidth
+                  helperText={
+                    autoBaseAmount
+                      ? `Auto calculated: ${autoBaseAmount.toFixed(2)}`
+                      : 'Leave blank to use exchange rate calculation'
+                  }
+                />
+              </Box>
+            </Box>
           )}
 
+          {/* Notes */}
           <TextField
-            multiline
-            rows={2}
             label="Notes"
             value={formData.notes}
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+            multiline
+            rows={2}
             fullWidth
             sx={{ mb: 2 }}
           />
 
-          {/* Transaction Summary */}
-          <Box sx={{ p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Transaction Summary
-            </Typography>
-
-            {formData.transaction_type === 'SPLIT' ? (
-              <>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2">Split Ratio:</Typography>
-                  <Typography variant="body2" fontWeight="bold">
-                    {formData.split_ratio || 'Not specified'}
-                  </Typography>
-                </Box>
-
-                {selectedSecurity && portfolioHoldings[selectedSecurity.symbol] > 0 && (
-                  <>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                      <Typography variant="body2">Current Shares:</Typography>
-                      <Typography variant="body2">
-                        {portfolioHoldings[selectedSecurity.symbol]}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                      <Typography variant="body2">Additional Shares:</Typography>
-                      <Typography variant="body2" fontWeight="bold">
-                        +{formData.quantity || 0}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
-                      <Typography variant="body2" fontWeight="bold">Total After Split:</Typography>
-                      <Typography variant="body2" fontWeight="bold" color="primary">
-                        {parseFloat(portfolioHoldings[selectedSecurity.symbol] || 0) + parseFloat(formData.quantity || 0)}
-                      </Typography>
-                    </Box>
-                  </>
-                )}
-
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  No cash impact for stock splits
-                </Typography>
-              </>
-            ) : formData.transaction_type === 'DIVIDEND' ? (
-              // Enhanced dividend summary display
-              <>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2">Gross Dividend:</Typography>
-                  <CurrencyDisplay
-                    amount={totalAmount}
-                    currency={formData.currency}
-                    showCode={true}
-                  />
-                </Box>
-
-                {formData.quantity && formData.price && (
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="body2">Dividend per share:</Typography>
-                    <CurrencyDisplay
-                      amount={parseFloat(formData.price) / parseFloat(formData.quantity)}
-                      currency={formData.currency}
-                      showCode={true}
-                    />
-                  </Box>
-                )}
-
-                {parseFloat(formData.fees || 0) > 0 && (
-                  <>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                      <Typography variant="body2">Fees:</Typography>
-                      <Typography variant="body2" color="error">
-                        -<CurrencyDisplay
-                          amount={parseFloat(formData.fees || 0)}
-                          currency={formData.currency}
-                          showCode={true}
-                        />
-                      </Typography>
-                    </Box>
-                    <Divider sx={{ my: 1 }} />
-                  </>
-                )}
-
-                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Typography variant="body1" fontWeight="bold">Net Dividend:</Typography>
-                  <Typography variant="body1" fontWeight="bold" color="success.main">
-                    <CurrencyDisplay
-                      amount={totalWithFees}
-                      currency={formData.currency}
-                      showCode={true}
-                    />
-                  </Typography>
-                </Box>
-
-                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                  Net amount will be added to cash and reduce cost basis
-                </Typography>
-              </>
-            ) : (
-              // Standard transaction summary for BUY/SELL
-              <>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                  <Typography variant="body2">Subtotal:</Typography>
-                  <CurrencyDisplay
-                    amount={totalAmount}
-                    currency={formData.currency}
-                    showCode={true}
-                  />
-                </Box>
-
-                {parseFloat(formData.fees || 0) > 0 && (
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="body2">Fees:</Typography>
-                    <CurrencyDisplay
-                      amount={parseFloat(formData.fees || 0)}
-                      currency={formData.currency}
-                      showCode={true}
-                    />
-                  </Box>
-                )}
-
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
-                  <Typography variant="body1" fontWeight="bold">Total:</Typography>
-                  <Typography variant="body1" fontWeight="bold">
-                    <CurrencyDisplay
-                      amount={totalWithFees}
-                      currency={formData.currency}
-                      showCode={true}
-                    />
-                  </Typography>
-                </Box>
-              </>
-            )}
-
-            {/* Exchange rate and converted amount display */}
-            {formData.currency !== portfolioCurrency && formData.transaction_type !== 'SPLIT' && (
-              <>
-                <Divider sx={{ my: 2 }} />
-
-                {exchangeRate && (
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography variant="caption" color="text.secondary">
-                      Exchange Rate:
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      1 {formData.currency} = {exchangeRate.toFixed(4)} {portfolioCurrency}
-                    </Typography>
-                  </Box>
-                )}
-
-                {convertedAmountWithFees !== null && (
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="body2" fontWeight="bold">
-                      Total in {portfolioCurrency}:
-                    </Typography>
-                    <Typography variant="body2" fontWeight="bold" color="primary">
-                      <CurrencyDisplay
-                        amount={convertedAmountWithFees}
-                        currency={portfolioCurrency}
-                        showCode={true}
-                      />
-                    </Typography>
-                  </Box>
-                )}
-              </>
-            )}
-          </Box>
+          {/* NEW: Transaction Summary with Auto-Deposit Warning */}
+          <TransactionSummaryWithAutoDeposit />
         </DialogContent>
+
+        {/* Add the Auto-Deposit Confirmation Dialog */}
+        <AutoDepositConfirmDialog />
 
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>

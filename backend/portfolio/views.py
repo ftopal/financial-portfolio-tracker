@@ -465,6 +465,81 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': f'Failed to verify balance: {str(e)}'}, status=500)
 
+    @action(detail=True, methods=['post'])
+    def check_auto_deposit(self, request, pk=None):
+        """Check if auto-deposit would be triggered for a transaction"""
+        portfolio = self.get_object()
+
+        try:
+            # Get transaction details from request
+            transaction_type = request.data.get('transaction_type')
+            total_cost = Decimal(str(request.data.get('total_cost', 0)))
+
+            # Only check for BUY transactions
+            if transaction_type != 'BUY' or total_cost <= 0:
+                return Response({
+                    'auto_deposit_needed': False,
+                    'current_balance': float(portfolio.cash_account.balance),
+                    'total_cost': float(total_cost),
+                    'message': 'No auto-deposit needed for this transaction type'
+                })
+
+            # Get user preferences
+            preferences, _ = UserPreferences.objects.get_or_create(user=request.user)
+
+            # Get cash account
+            cash_account = portfolio.cash_account
+
+            # Recalculate balance to ensure accuracy
+            cash_account.recalculate_balances()
+
+            # Check if sufficient balance exists
+            has_sufficient_balance = cash_account.has_sufficient_balance(total_cost)
+
+            if has_sufficient_balance:
+                return Response({
+                    'auto_deposit_needed': False,
+                    'current_balance': float(cash_account.balance),
+                    'total_cost': float(total_cost),
+                    'shortfall': 0,
+                    'message': 'Sufficient balance available'
+                })
+
+            # Calculate auto-deposit details
+            if not preferences.auto_deposit_enabled:
+                return Response({
+                    'auto_deposit_needed': False,
+                    'current_balance': float(cash_account.balance),
+                    'total_cost': float(total_cost),
+                    'shortfall': float(total_cost - cash_account.balance),
+                    'message': 'Auto-deposit is disabled. Transaction will fail due to insufficient funds.',
+                    'error': 'Insufficient cash balance'
+                })
+
+            # Calculate deposit amount based on user preference
+            if preferences.auto_deposit_mode == 'EXACT':
+                deposit_amount = total_cost
+            else:  # SHORTFALL
+                deposit_amount = total_cost - cash_account.balance
+
+            return Response({
+                'auto_deposit_needed': True,
+                'auto_deposit_enabled': preferences.auto_deposit_enabled,
+                'auto_deposit_mode': preferences.auto_deposit_mode,
+                'current_balance': float(cash_account.balance),
+                'total_cost': float(total_cost),
+                'shortfall': float(total_cost - cash_account.balance),
+                'deposit_amount': float(deposit_amount),
+                'new_balance_after_deposit': float(cash_account.balance + deposit_amount),
+                'currency': cash_account.currency,
+                'message': f'Auto-deposit of {deposit_amount} {cash_account.currency} will be created'
+            })
+
+        except Exception as e:
+            return Response({
+                'error': f'Failed to check auto-deposit: {str(e)}'
+            }, status=400)
+
 
 class SecurityViewSet(viewsets.ModelViewSet):
     queryset = Security.objects.all()

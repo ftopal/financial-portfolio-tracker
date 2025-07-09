@@ -128,6 +128,7 @@ export const portfolioAPI = {
   depositCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/deposit_cash/`, data),
   withdrawCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/withdraw_cash/`, data),
   getCashHistory: (portfolioId) => API.get(`portfolios/${portfolioId}/cash_history/`),
+  checkAutoDeposit: (portfolioId, data) => API.post(`portfolios/${portfolioId}/check_auto_deposit/`, data),
 
   // Currency-related portfolio operations
   supported_currencies: () => API.get('portfolios/supported_currencies/'),
