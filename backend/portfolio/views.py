@@ -24,6 +24,7 @@ from .serializers import (
 from .services.security_import_service import SecurityImportService
 from .services.currency_service import CurrencyService
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -276,20 +277,69 @@ class PortfolioViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def cash_history(self, request, pk=None):
-        """Get cash transaction history for portfolio"""
+        """Get cash transaction history for portfolio with proper pagination"""
         portfolio = self.get_object()
-        transactions = CashTransaction.objects.filter(
-            cash_account=portfolio.cash_account
-        ).order_by('-transaction_date')
 
-        # Pagination
-        page = self.paginate_queryset(transactions)
-        if page is not None:
-            serializer = CashTransactionSerializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+        try:
+            transactions = CashTransaction.objects.filter(
+                cash_account=portfolio.cash_account
+            ).select_related('related_transaction__security').order_by('-transaction_date', '-created_at')
 
-        serializer = CashTransactionSerializer(transactions, many=True)
-        return Response(serializer.data)
+            # Optional filtering
+            transaction_type = request.query_params.get('transaction_type')
+            if transaction_type:
+                transactions = transactions.filter(transaction_type=transaction_type)
+
+            start_date = request.query_params.get('start_date')
+            if start_date:
+                transactions = transactions.filter(transaction_date__gte=start_date)
+
+            end_date = request.query_params.get('end_date')
+            if end_date:
+                transactions = transactions.filter(transaction_date__lte=end_date)
+
+            # Get total count before pagination
+            total_count = transactions.count()
+
+            # Pagination with default page size of 20
+            page_size = int(request.query_params.get('page_size', 20))
+            page_number = int(request.query_params.get('page', 1))
+
+            # Ensure page size is within reasonable limits
+            page_size = min(max(page_size, 1), 100)
+
+            # Ensure page number is valid
+            max_pages = math.ceil(total_count / page_size) if total_count > 0 else 1
+            page_number = min(max(page_number, 1), max_pages)
+
+            # Set pagination page size for this request
+            self.paginator.page_size = page_size
+
+            # Paginate the queryset
+            page = self.paginate_queryset(transactions)
+            if page is not None:
+                serializer = CashTransactionSerializer(page, many=True)
+
+                # Get the paginated response
+                paginated_response = self.get_paginated_response(serializer.data)
+
+                # Add additional pagination metadata
+                paginated_response.data['current_page'] = page_number
+                paginated_response.data['page_size'] = page_size
+                paginated_response.data['total_pages'] = max_pages
+
+                return paginated_response
+
+            # Fallback for non-paginated response
+            serializer = CashTransactionSerializer(transactions, many=True)
+            return Response(serializer.data)
+
+        except Exception as e:
+            logger.error(f"Error in cash_history: {str(e)}")
+            return Response(
+                {'error': f'Failed to fetch cash history: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=True, methods=['get'])
     def value(self, request, pk=None):

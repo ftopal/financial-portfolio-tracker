@@ -127,7 +127,23 @@ export const portfolioAPI = {
   // New cash-related endpoints
   depositCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/deposit_cash/`, data),
   withdrawCash: (portfolioId, data) => API.post(`portfolios/${portfolioId}/withdraw_cash/`, data),
-  getCashHistory: (portfolioId) => API.get(`portfolios/${portfolioId}/cash_history/`),
+  getCashHistory: (portfolioId, options = {}) => {
+    const params = new URLSearchParams();
+
+    // Add pagination parameters
+    if (options.page) params.append('page', options.page);
+    if (options.page_size) params.append('page_size', options.page_size);
+
+    // Add optional filters
+    if (options.transaction_type) params.append('transaction_type', options.transaction_type);
+    if (options.start_date) params.append('start_date', options.start_date);
+    if (options.end_date) params.append('end_date', options.end_date);
+
+    const queryString = params.toString();
+    const url = `portfolios/${portfolioId}/cash_history/${queryString ? `?${queryString}` : ''}`;
+
+    return API.get(url);
+  },
   checkAutoDeposit: (portfolioId, data) => API.post(`portfolios/${portfolioId}/check_auto_deposit/`, data),
 
   // Currency-related portfolio operations

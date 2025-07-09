@@ -25,7 +25,13 @@ import {
   CircularProgress,
   InputAdornment,
   Tooltip,
-  Stack
+  Stack,
+  Pagination,
+  TablePagination,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem
 } from '@mui/material';
 import {
   AccountBalance as AccountBalanceIcon,
@@ -39,7 +45,7 @@ import {
   CurrencyExchange as CurrencyExchangeIcon
 } from '@mui/icons-material';
 import api from '../services/api';
-import { extractDataArray } from '../utils/apiHelpers';
+import { extractDataArray, getPaginationInfo, isPaginatedResponse } from '../utils/apiHelpers';
 
 const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBalanceUpdate, portfolio = null }) => {
   const [open, setOpen] = useState(false);
@@ -56,29 +62,140 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
   const [transactionToDelete, setTransactionToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [transactionDate, setTransactionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paginationInfo, setPaginationInfo] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   // Get the portfolio currency from portfolio prop or use the currency prop
   const portfolioCurrency = portfolio?.base_currency || currency || 'USD';
 
   useEffect(() => {
     if (tabValue === 1) {
-      fetchCashHistory();
+      fetchCashHistory(1, pageSize); // Reset to first page when opening history tab
     }
   }, [tabValue, portfolioId]);
 
-  const fetchCashHistory = async () => {
+  const fetchCashHistory = async (page = 1, size = pageSize) => {
     setHistoryLoading(true);
     try {
-      const response = await api.portfolios.getCashHistory(portfolioId);
+      // Add pagination parameters to the API call
+      const response = await api.portfolios.getCashHistory(portfolioId, { page, page_size: size });
+
+      // Check if response is paginated
+      if (isPaginatedResponse(response)) {
+        const pagInfo = getPaginationInfo(response);
+        setPaginationInfo(pagInfo);
+
+        // Use the actual current page from the response if available
+        const actualCurrentPage = pagInfo?.currentPage || page;
+        setCurrentPage(actualCurrentPage);
+        setPageSize(size);
+
+        // If we requested a page beyond the available data, redirect to the last valid page
+        if (pagInfo && page > pagInfo.totalPages && pagInfo.totalPages > 0) {
+          console.log(`Requested page ${page} exceeds total pages ${pagInfo.totalPages}, redirecting to page ${pagInfo.totalPages}`);
+          fetchCashHistory(pagInfo.totalPages, size);
+          return;
+        }
+      } else {
+        // Handle non-paginated response (fallback)
+        setPaginationInfo(null);
+        setCurrentPage(1);
+      }
+
       // Use the helper to extract data array
       const cashHistoryData = extractDataArray(response);
       setCashHistory(cashHistoryData);
     } catch (err) {
       console.error('Error fetching cash history:', err);
       setCashHistory([]); // Set empty array on error
+      setPaginationInfo(null);
+
+      // If we got an error and we're not on page 1, try going to page 1
+      if (page > 1) {
+        console.log(`Error fetching page ${page}, redirecting to page 1`);
+        fetchCashHistory(1, size);
+      }
     } finally {
       setHistoryLoading(false);
     }
+  };
+
+  const handlePageChange = (event, newPage) => {
+    // Validate the new page number
+    if (paginationInfo && newPage > paginationInfo.totalPages) {
+      console.log(`Page ${newPage} exceeds total pages ${paginationInfo.totalPages}`);
+      return;
+    }
+
+    if (newPage < 1) {
+      console.log(`Invalid page number: ${newPage}`);
+      return;
+    }
+
+    fetchCashHistory(newPage, pageSize);
+  };
+
+  const handlePageSizeChange = (event) => {
+    const newPageSize = parseInt(event.target.value);
+    setPageSize(newPageSize);
+    fetchCashHistory(1, newPageSize); // Reset to first page when changing page size
+  };
+
+  const PaginationControls = ({ position = 'bottom' }) => {
+    if (!paginationInfo || paginationInfo.totalPages <= 1) return null;
+
+    // Ensure current page is within valid range
+    const validCurrentPage = Math.min(Math.max(currentPage, 1), paginationInfo.totalPages);
+
+    // Calculate display range
+    const startItem = Math.min(((validCurrentPage - 1) * pageSize) + 1, paginationInfo.count);
+    const endItem = Math.min(validCurrentPage * pageSize, paginationInfo.count);
+
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          p: 2,
+          bgcolor: position === 'top' ? 'grey.50' : 'transparent'
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Showing {startItem} to {endItem} of {paginationInfo.count} transactions
+          </Typography>
+
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>Rows per page</InputLabel>
+            <Select
+              value={pageSize}
+              onChange={handlePageSizeChange}
+              label="Rows per page"
+            >
+              <MenuItem value={10}>10</MenuItem>
+              <MenuItem value={20}>20</MenuItem>
+              <MenuItem value={50}>50</MenuItem>
+              <MenuItem value={100}>100</MenuItem>
+            </Select>
+          </FormControl>
+        </Box>
+
+        <Pagination
+          count={paginationInfo.totalPages}
+          page={validCurrentPage}
+          onChange={handlePageChange}
+          variant="outlined"
+          shape="rounded"
+          showFirstButton
+          showLastButton
+          size="small"
+          boundaryCount={1}
+          siblingCount={1}
+        />
+      </Box>
+    );
   };
 
   const handleOpen = (type) => {
@@ -115,11 +232,11 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
         setSuccess(`Transaction deleted successfully`);
       }
 
-      // Refresh data
+      // Refresh data - stay on current page
       if (onBalanceUpdate) {
         onBalanceUpdate();
       }
-      fetchCashHistory();
+      fetchCashHistory(currentPage, pageSize);
 
       setDeleteConfirmOpen(false);
       setTransactionToDelete(null);
@@ -150,7 +267,7 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
         if (onBalanceUpdate) {
           onBalanceUpdate();
         }
-        fetchCashHistory();
+        fetchCashHistory(currentPage, pageSize);
       }
     } catch (err) {
       setError('Failed to recalculate balance: ' + (err.response?.data?.error || err.message));
@@ -171,7 +288,10 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
         if (is_consistent) {
           setSuccess(`✅ Balance is consistent: ${formatCurrency(stored_balance)}`);
         } else {
-          setError(`❌ Balance inconsistency detected! Difference: ${formatCurrency(difference)}`);
+          setError(`❌ Balance inconsistency detected!
+          Stored: ${formatCurrency(stored_balance)}
+          Calculated: ${formatCurrency(calculated_balance)}
+          Difference: ${formatCurrency(difference)}`);
         }
       }
     } catch (err) {
@@ -360,6 +480,10 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                 </Button>
               </Stack>
             </Box>
+
+            {/* Top pagination controls */}
+            <PaginationControls position="top" />
+
             {historyLoading ? (
               <Box display="flex" justifyContent="center" p={3}>
                 <CircularProgress />
@@ -434,6 +558,9 @@ const CashManagement = ({ portfolioId, cashBalance = 0, currency = 'USD', onBala
                 </TableBody>
               </Table>
             )}
+
+            {/* Bottom pagination controls */}
+            <PaginationControls position="bottom" />
           </TableContainer>
         )}
 
