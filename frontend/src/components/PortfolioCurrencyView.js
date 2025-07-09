@@ -8,23 +8,58 @@ import {
   FormControl,
   InputLabel,
   Box,
-  CircularProgress
+  CircularProgress,
+  Divider
 } from '@mui/material';
-import axios from 'axios';
+import { currencyAPI } from '../services/api';
 
 const PortfolioCurrencyView = ({ portfolio }) => {
   const [displayCurrency, setDisplayCurrency] = useState(portfolio?.base_currency || 'USD');
   const [convertedValue, setConvertedValue] = useState(null);
+  const [exchangeRate, setExchangeRate] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [availableCurrencies, setAvailableCurrencies] = useState([]);
+  const [loadingCurrencies, setLoadingCurrencies] = useState(true);
 
-  const currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY'];
+  // Fetch available currencies from the backend
+  useEffect(() => {
+    const fetchCurrencies = async () => {
+      try {
+        setLoadingCurrencies(true);
+        const response = await currencyAPI.list();
+
+        // Extract currency codes from the response
+        const currencies = response.data.results || response.data || [];
+        const currencyCodes = currencies.map(currency => currency.code);
+        setAvailableCurrencies(currencyCodes);
+
+        console.log('Fetched currencies from API:', currencyCodes);
+      } catch (err) {
+        console.error('Failed to fetch currencies:', err);
+        // Fallback to the most common currencies if API fails
+        setAvailableCurrencies(['USD', 'EUR', 'GBP']);
+      } finally {
+        setLoadingCurrencies(false);
+      }
+    };
+
+    fetchCurrencies();
+  }, []);
 
   const formatCurrency = (amount, currency) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: currency
     }).format(amount || 0);
+  };
+
+  const formatExchangeRate = (rate, fromCurrency, toCurrency) => {
+    if (!rate) return '';
+
+    // Format the rate to 4 decimal places for display
+    const formattedRate = parseFloat(rate).toFixed(4);
+    return `1 ${fromCurrency} = ${formattedRate} ${toCurrency}`;
   };
 
   // Convert currency when display currency changes
@@ -36,6 +71,7 @@ const PortfolioCurrencyView = ({ portfolio }) => {
     // If display currency is same as base currency, no conversion needed
     if (displayCurrency === portfolio.base_currency) {
       setConvertedValue(portfolioValue);
+      setExchangeRate(null);
       setError(null);
       return;
     }
@@ -46,31 +82,45 @@ const PortfolioCurrencyView = ({ portfolio }) => {
       setError(null);
 
       try {
-        // Get the token from localStorage
-        const token = localStorage.getItem('token');
-        const BASE_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000/';
+        // Round the amount to 8 decimal places to prevent serializer errors
+        const roundedAmount = Math.round(portfolioValue * 100000000) / 100000000;
 
-        const response = await axios.post(
-          `${BASE_URL}api/currencies/convert/`,
-          {
-            amount: portfolioValue,
-            from_currency: portfolio.base_currency,
-            to_currency: displayCurrency
-          },
-          {
-            headers: {
-              'Authorization': `Token ${token}`,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
+        console.log('Converting currency:', {
+          original_amount: portfolioValue,
+          rounded_amount: roundedAmount,
+          from_currency: portfolio.base_currency,
+          to_currency: displayCurrency
+        });
 
+        const response = await currencyAPI.convert({
+          amount: roundedAmount,
+          from_currency: portfolio.base_currency,
+          to_currency: displayCurrency
+        });
+
+        console.log('Conversion response:', response.data);
         setConvertedValue(response.data.converted_amount);
+
+        // Calculate and store the exchange rate for display
+        if (roundedAmount > 0) {
+          const calculatedRate = response.data.converted_amount / roundedAmount;
+          setExchangeRate(calculatedRate);
+        }
       } catch (err) {
         console.error('Currency conversion failed:', err);
-        setError('Failed to convert currency');
+
+        // More detailed error handling
+        if (err.response?.data?.error) {
+          setError(`Failed to convert currency: ${err.response.data.error}`);
+        } else if (err.response?.status === 400) {
+          setError('Failed to convert currency - invalid request');
+        } else {
+          setError('Failed to convert currency - exchange rate not available');
+        }
+
         // Fallback to showing original value
         setConvertedValue(portfolioValue);
+        setExchangeRate(null);
       } finally {
         setLoading(false);
       }
@@ -95,12 +145,19 @@ const PortfolioCurrencyView = ({ portfolio }) => {
               value={displayCurrency}
               onChange={(e) => setDisplayCurrency(e.target.value)}
               label="Display Currency"
+              disabled={loadingCurrencies}
             >
-              {currencies.map((currency) => (
-                <MenuItem key={currency} value={currency}>
-                  {currency} {currency === portfolio.base_currency ? '(Base)' : ''}
+              {loadingCurrencies ? (
+                <MenuItem disabled>
+                  <CircularProgress size={20} />
                 </MenuItem>
-              ))}
+              ) : (
+                availableCurrencies.map((currency) => (
+                  <MenuItem key={currency} value={currency}>
+                    {currency} {currency === portfolio.base_currency ? '(Base)' : ''}
+                  </MenuItem>
+                ))
+              )}
             </Select>
           </FormControl>
         </Box>
@@ -122,13 +179,22 @@ const PortfolioCurrencyView = ({ portfolio }) => {
               </Typography>
             )}
 
+            {/* Show exchange rate if conversion occurred */}
+            {displayCurrency !== portfolio.base_currency && exchangeRate && !error && (
+              <Typography variant="caption" color="text.secondary" display="block" mb={2}>
+                Exchange Rate: {formatExchangeRate(exchangeRate, portfolio.base_currency, displayCurrency)}
+              </Typography>
+            )}
+
             {error && (
               <Typography variant="caption" color="error" display="block" mb={2}>
                 {error}
               </Typography>
             )}
 
-            <Box mt={3}>
+            <Divider sx={{ my: 2 }} />
+
+            <Box mt={2}>
               <Typography variant="subtitle2" gutterBottom>
                 Currency Exposure
               </Typography>
@@ -141,12 +207,25 @@ const PortfolioCurrencyView = ({ portfolio }) => {
 
               {/* Show converted value in exposure if different currency selected */}
               {displayCurrency !== portfolio.base_currency && convertedValue && !error && (
-                <Box display="flex" justifyContent="space-between" my={1}>
-                  <Typography variant="body2">{displayCurrency} (converted):</Typography>
-                  <Typography variant="body2" fontWeight="medium">
-                    {formatCurrency(convertedValue, displayCurrency)}
-                  </Typography>
-                </Box>
+                <>
+                  <Box display="flex" justifyContent="space-between" my={1}>
+                    <Typography variant="body2">{displayCurrency} (converted):</Typography>
+                    <Typography variant="body2" fontWeight="medium">
+                      {formatCurrency(convertedValue, displayCurrency)}
+                    </Typography>
+                  </Box>
+                  {/* Show exchange rate again in the exposure section for convenience */}
+                  {exchangeRate && (
+                    <Box display="flex" justifyContent="space-between" my={1}>
+                      <Typography variant="caption" color="text.secondary">
+                        Rate:
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {formatExchangeRate(exchangeRate, portfolio.base_currency, displayCurrency)}
+                      </Typography>
+                    </Box>
+                  )}
+                </>
               )}
             </Box>
           </>

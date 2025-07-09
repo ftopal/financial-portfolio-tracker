@@ -22,10 +22,19 @@ class ExchangeRateSerializer(serializers.ModelSerializer):
 
 
 class CurrencyConversionSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=20, decimal_places=8)
+    amount = serializers.DecimalField(max_digits=20, decimal_places=12)  # Increased from 8 to 12
     from_currency = serializers.CharField(max_length=3)
     to_currency = serializers.CharField(max_length=3)
     date = serializers.DateField(required=False)
+
+    def validate_amount(self, value):
+        """Additional validation for amount"""
+        if value < 0:
+            raise serializers.ValidationError("Amount must be positive")
+
+        # Round to 8 decimal places for processing if needed
+        # This prevents issues with JavaScript floating point precision
+        return value.quantize(Decimal('0.00000001'))  # 8 decimal places
 
 
 class UserSerializer(serializers.ModelSerializer):

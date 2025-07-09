@@ -38,28 +38,103 @@ class CurrencyViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'])
     def convert(self, request):
         """Convert amount between currencies"""
+        logger.info(f"Currency conversion request received: {request.data}")
+
         serializer = CurrencyConversionSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            logger.error(f"Serializer validation failed: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        validated_data = serializer.validated_data
+        logger.info(f"Validated data: {validated_data}")
 
         try:
+            # Extract values
+            amount = validated_data['amount']
+            from_currency = validated_data['from_currency']
+            to_currency = validated_data['to_currency']
+            conversion_date = validated_data.get('date')
+
+            logger.info(f"Converting {amount} from {from_currency} to {to_currency} on {conversion_date}")
+
+            # Check if currencies are active
+            from_currency_active = Currency.objects.filter(code=from_currency, is_active=True).exists()
+            to_currency_active = Currency.objects.filter(code=to_currency, is_active=True).exists()
+
+            logger.info(
+                f"Currency status - {from_currency} active: {from_currency_active}, {to_currency} active: {to_currency_active}")
+
+            if not from_currency_active:
+                error_msg = f"Currency '{from_currency}' is not active or not found"
+                logger.error(error_msg)
+                return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not to_currency_active:
+                error_msg = f"Currency '{to_currency}' is not active or not found"
+                logger.error(error_msg)
+                return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check for exchange rate in database
+            if conversion_date is None:
+                conversion_date = timezone.now().date()
+
+            logger.info(f"Looking for exchange rate on date: {conversion_date}")
+
+            # Direct rate check
+            direct_rate = ExchangeRate.objects.filter(
+                from_currency=from_currency,
+                to_currency=to_currency,
+                date__lte=conversion_date
+            ).order_by('-date').first()
+
+            if direct_rate:
+                logger.info(f"Found direct rate: {direct_rate.rate} (date: {direct_rate.date})")
+            else:
+                logger.info("No direct rate found")
+
+            # Inverse rate check
+            inverse_rate = ExchangeRate.objects.filter(
+                from_currency=to_currency,
+                to_currency=from_currency,
+                date__lte=conversion_date
+            ).order_by('-date').first()
+
+            if inverse_rate:
+                logger.info(f"Found inverse rate: {inverse_rate.rate} (date: {inverse_rate.date})")
+            else:
+                logger.info("No inverse rate found")
+
+            # Attempt conversion
             converted_amount = CurrencyService.convert_amount(
-                serializer.validated_data['amount'],
-                serializer.validated_data['from_currency'],
-                serializer.validated_data['to_currency'],
-                serializer.validated_data.get('date')
+                amount,
+                from_currency,
+                to_currency,
+                conversion_date
             )
 
+            logger.info(f"Conversion successful: {converted_amount}")
+
             return Response({
-                'amount': serializer.validated_data['amount'],
-                'from_currency': serializer.validated_data['from_currency'],
-                'to_currency': serializer.validated_data['to_currency'],
+                'amount': amount,
+                'from_currency': from_currency,
+                'to_currency': to_currency,
                 'converted_amount': converted_amount,
-                'date': serializer.validated_data.get('date', timezone.now().date())
+                'date': conversion_date
             })
+
         except ValueError as e:
+            error_msg = str(e)
+            logger.error(f"Currency conversion failed: {error_msg}")
             return Response(
-                {'error': str(e)},
+                {'error': error_msg},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            error_msg = f"Unexpected error during currency conversion: {str(e)}"
+            logger.error(error_msg)
+            return Response(
+                {'error': 'Currency conversion failed due to an internal error'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
     @action(detail=False, methods=['post'])

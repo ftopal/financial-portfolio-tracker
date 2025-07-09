@@ -46,13 +46,41 @@ class CurrencyService:
             cache.set(cache_key, str(rate), cls.CACHE_TIMEOUT)
             return rate
 
-        # If no rate found, try to fetch from external API
+        # If no rate found for the exact date, try to find the most recent rate
+        recent_rate = ExchangeRate.objects.filter(
+            from_currency=from_currency,
+            to_currency=to_currency,
+            date__lte=date
+        ).order_by('-date').first()
+
+        if recent_rate:
+            logger.info(f"Using recent rate for {from_currency}/{to_currency} from {recent_rate.date}")
+            cache.set(cache_key, str(recent_rate.rate), cls.CACHE_TIMEOUT)
+            return recent_rate.rate
+
+        # Try inverse rate
+        recent_inverse = ExchangeRate.objects.filter(
+            from_currency=to_currency,
+            to_currency=from_currency,
+            date__lte=date
+        ).order_by('-date').first()
+
+        if recent_inverse:
+            inverse_rate = Decimal('1') / recent_inverse.rate
+            logger.info(f"Using inverse rate for {from_currency}/{to_currency} from {recent_inverse.date}")
+            cache.set(cache_key, str(inverse_rate), cls.CACHE_TIMEOUT)
+            return inverse_rate
+
+        # If no rate found and it's today, try to fetch from external API
         if date == timezone.now().date():
-            cls.update_exchange_rates([from_currency], [to_currency])
-            rate = ExchangeRate.get_rate(from_currency, to_currency, date)
-            if rate is not None:
-                cache.set(cache_key, str(rate), cls.CACHE_TIMEOUT)
-                return rate
+            try:
+                cls.update_exchange_rates([from_currency], [to_currency])
+                rate = ExchangeRate.get_rate(from_currency, to_currency, date)
+                if rate is not None:
+                    cache.set(cache_key, str(rate), cls.CACHE_TIMEOUT)
+                    return rate
+            except Exception as e:
+                logger.error(f"Failed to fetch exchange rate from external API: {e}")
 
         logger.warning(f"No exchange rate found for {from_currency}/{to_currency} on {date}")
         return None
@@ -63,11 +91,23 @@ class CurrencyService:
         if amount == 0:
             return Decimal('0')
 
+        # Validate currencies exist in our system
+        if not cls._validate_currency(from_currency):
+            raise ValueError(f"Currency '{from_currency}' is not supported or active")
+
+        if not cls._validate_currency(to_currency):
+            raise ValueError(f"Currency '{to_currency}' is not supported or active")
+
         rate = cls.get_exchange_rate(from_currency, to_currency, date)
         if rate is None:
             raise ValueError(f"No exchange rate available for {from_currency}/{to_currency}")
 
         return amount * rate
+
+    @classmethod
+    def _validate_currency(cls, currency_code):
+        """Validate that a currency is active in our system"""
+        return Currency.objects.filter(code=currency_code, is_active=True).exists()
 
     @classmethod
     def update_exchange_rates(cls, base_currencies=None, target_currencies=None):
@@ -76,13 +116,16 @@ class CurrencyService:
         This example uses exchangerate-api.com (free tier available)
         """
         if base_currencies is None:
-            base_currencies = ['USD', 'EUR', 'GBP']
+            # Only use active currencies
+            base_currencies = list(Currency.objects.filter(is_active=True).values_list('code', flat=True))
 
         if target_currencies is None:
-            # Get all active currencies
-            target_currencies = list(
-                Currency.objects.filter(is_active=True).values_list('code', flat=True)
-            )
+            # Only use active currencies
+            target_currencies = list(Currency.objects.filter(is_active=True).values_list('code', flat=True))
+
+        if not base_currencies or not target_currencies:
+            logger.warning("No active currencies found for exchange rate update")
+            return
 
         api_key = getattr(settings, 'EXCHANGE_RATE_API_KEY', None)
 
@@ -127,68 +170,60 @@ class CurrencyService:
             except requests.RequestException as e:
                 logger.error(f"Failed to fetch exchange rates for {base}: {e}")
             except Exception as e:
-                logger.error(f"Error updating exchange rates for {base}: {e}")
+                logger.error(f"Unexpected error updating exchange rates for {base}: {e}")
 
     @classmethod
     def get_portfolio_value_in_currency(cls, portfolio, target_currency, date=None):
-        """Calculate total portfolio value in a specific currency"""
-        from ..models import Transaction
-
-        if date is None:
-            date = timezone.now().date()
-
+        """
+        Get portfolio value converted to target currency
+        """
+        holdings = portfolio.get_holdings()
         total_value = Decimal('0')
 
-        # Get holdings
-        holdings = portfolio.get_holdings()
+        for holding in holdings.values():
+            security_currency = holding.get('security', {}).get('currency', 'USD')
+            current_value = Decimal(str(holding['current_value']))
 
-        for security_id, holding_data in holdings.items():
-            security = holding_data['security']
-            quantity = holding_data['quantity']
-            current_value = security.current_price * quantity
-
-            # Convert from security currency to target currency
-            if security.currency != target_currency:
+            if security_currency == target_currency:
+                total_value += current_value
+            else:
                 converted_value = cls.convert_amount(
-                    current_value,
-                    security.currency,
-                    target_currency,
-                    date
+                    current_value, security_currency, target_currency, date
                 )
                 total_value += converted_value
-            else:
-                total_value += current_value
 
         # Add cash balance
         if hasattr(portfolio, 'cash_account'):
+            cash_currency = portfolio.cash_account.currency or portfolio.currency
             cash_balance = portfolio.cash_account.balance
-            if portfolio.cash_account.currency != target_currency:
-                cash_balance = cls.convert_amount(
-                    cash_balance,
-                    portfolio.cash_account.currency,
-                    target_currency,
-                    date
+
+            if cash_currency == target_currency:
+                total_value += cash_balance
+            else:
+                converted_cash = cls.convert_amount(
+                    cash_balance, cash_currency, target_currency, date
                 )
-            total_value += cash_balance
+                total_value += converted_cash
 
         return total_value
 
     @classmethod
     def get_currency_exposure(cls, portfolio):
-        """Calculate portfolio exposure by currency"""
+        """
+        Calculate the currency exposure of a portfolio
+        Returns dict with currency as key and exposure amount as value
+        """
         exposure = {}
 
-        # Get holdings
+        # Get holdings currency exposure
         holdings = portfolio.get_holdings()
+        for holding in holdings.values():
+            currency = holding.get('security', {}).get('currency', 'USD')
+            current_value = Decimal(str(holding['current_value']))
 
-        for security_id, holding_data in holdings.items():
-            security = holding_data['security']
-            quantity = holding_data['quantity']
-            current_value = security.current_price * quantity
-
-            if security.currency not in exposure:
-                exposure[security.currency] = Decimal('0')
-            exposure[security.currency] += current_value
+            if currency not in exposure:
+                exposure[currency] = Decimal('0')
+            exposure[currency] += current_value
 
         # Add cash balance
         if hasattr(portfolio, 'cash_account'):
