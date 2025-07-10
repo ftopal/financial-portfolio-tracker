@@ -1,6 +1,15 @@
 from django.contrib import admin
-from .models import *
+from django.http import HttpResponseRedirect
+from django.shortcuts import render
+from django.urls import path
+from django.contrib import messages
+from .models import Security, Portfolio, Transaction, AssetCategory, PriceHistory, RealEstateAsset, \
+    PortfolioCashAccount, CashTransaction, UserPreferences
+from .services.security_import_service import SecurityImportService
 from .models_currency import Currency, ExchangeRate
+import logging
+
+logger = logging.getLogger(__name__)
 
 @admin.register(AssetCategory)
 class AssetCategoryAdmin(admin.ModelAdmin):
@@ -40,10 +49,12 @@ class PriceHistoryAdmin(admin.ModelAdmin):
 
 @admin.register(Security)
 class SecurityAdmin(admin.ModelAdmin):
-    list_display = ['symbol', 'name', 'security_type', 'current_price', 'last_updated']
-    list_filter = ['security_type', 'exchange', 'is_active', 'sector']
-    search_fields = ['symbol', 'name']
-    readonly_fields = ['created_at', 'updated_at', 'last_updated']
+    list_display = ('symbol', 'name', 'security_type', 'current_price', 'currency', 'exchange', 'is_active',
+                    'last_updated')
+    list_filter = ('security_type', 'currency', 'exchange', 'is_active', 'data_source')
+    search_fields = ('symbol', 'name', 'exchange')
+    readonly_fields = ('created_at', 'updated_at', 'last_updated')
+    ordering = ('symbol',)
 
     fieldsets = (
         ('Basic Information', {
@@ -60,6 +71,43 @@ class SecurityAdmin(admin.ModelAdmin):
             'fields': ('is_active', 'data_source', 'created_at', 'updated_at')
         }),
     )
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('import-security/', self.admin_site.admin_view(self.import_security_view),
+                 name='portfolio_security_import'),
+        ]
+        return custom_urls + urls
+
+    def import_security_view(self, request):
+        """Admin view for importing securities from Yahoo Finance"""
+        if request.method == 'POST':
+            symbol = request.POST.get('symbol', '').strip().upper()
+
+            if not symbol:
+                messages.error(request, 'Please enter a valid symbol.')
+                return render(request, 'admin/portfolio/security/import_form.html')
+
+            try:
+                service = SecurityImportService()
+                result = service.search_and_import_security(symbol)
+
+                if result.get('error'):
+                    messages.error(request, f"Import failed: {result['error']}")
+                elif result.get('exists'):
+                    messages.warning(request, f"Security {symbol} already exists in the database.")
+                else:
+                    security = result.get('security')
+                    messages.success(request, f"Successfully imported {security.symbol} - {security.name}")
+
+            except Exception as e:
+                logger.error(f"Admin import error for {symbol}: {str(e)}")
+                messages.error(request, f"Import failed: {str(e)}")
+
+            return HttpResponseRedirect('../')
+
+        return render(request, 'admin/portfolio/security/import_form.html')
 
 
 @admin.register(RealEstateAsset)

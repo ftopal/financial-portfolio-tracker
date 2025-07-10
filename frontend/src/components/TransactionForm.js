@@ -22,7 +22,7 @@ import {
   Chip
 } from '@mui/material';
 import InfoIcon from '@mui/icons-material/Info';
-import { Search as SearchIcon, TrendingUp, AttachMoney as AttachMoneyIcon } from '@mui/icons-material';
+import { Search as SearchIcon, AttachMoney as AttachMoneyIcon } from '@mui/icons-material';
 import CurrencySelector from './CurrencySelector';
 import CurrencyDisplay from './CurrencyDisplay';
 import api, { currencyAPI } from '../services/api';
@@ -245,34 +245,6 @@ const TransactionForm = ({
       searchSecurities(searchInput);
     }
   }, [searchInput, searchOpen, searchSecurities]);
-
-  const handleImportFromYahoo = async () => {
-    if (!searchInput || searchInput.length < 1) return;
-
-    setSearchLoading(true);
-    setError('');
-
-    try {
-      const response = await api.securities.import(searchInput.toUpperCase());
-
-      if (response.data.security) {
-        const imported = response.data.security;
-        setSelectedSecurity(imported);
-        setSearchOptions([imported]);
-        setFormData(prev => ({
-          ...prev,
-          price: imported.current_price?.toString() || '',
-          currency: imported.currency || 'USD' // Auto-set currency
-        }));
-        setSearchOpen(false);
-        setError('');
-      }
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to import from Yahoo Finance');
-    } finally {
-      setSearchLoading(false);
-    }
-  };
 
   // Calculate exchange rate when currency or amount changes
   const fetchExchangeRate = useCallback(async () => {
@@ -946,21 +918,9 @@ const TransactionForm = ({
                 noOptionsText={
                   <Box sx={{ p: 2 }}>
                     {searchInput.length >= 2 ? (
-                      <>
-                        <Typography variant="body2" gutterBottom>
-                          No results found for "{searchInput}"
-                        </Typography>
-                        <Button
-                          variant="contained"
-                          startIcon={<TrendingUp />}
-                          onClick={handleImportFromYahoo}
-                          disabled={searchLoading}
-                          fullWidth
-                          sx={{ mt: 1 }}
-                        >
-                          Import {searchInput.toUpperCase()} from Yahoo Finance
-                        </Button>
-                      </>
+                      <Typography variant="body2" gutterBottom>
+                        No results found for "{searchInput}". Contact administrator to add new securities.
+                      </Typography>
                     ) : (
                       <Typography variant="body2" color="text.secondary">
                         Type at least 2 characters to search

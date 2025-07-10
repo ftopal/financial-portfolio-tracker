@@ -703,18 +703,26 @@ class SecurityViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def import_security(self, request):
-        """Import security data from external source"""
+        """Import security data from external source - ADMIN ONLY"""
+
+        # Check if user is admin/staff
+        if not request.user.is_staff:
+            return Response(
+                {
+                    'error': 'Security import is restricted to administrators only. Please contact your administrator to add new securities.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         symbol = request.data.get('symbol')
         if not symbol:
-            return Response({'error': 'Symbol is required'}, status=400)
+            return Response({'error': 'Symbol is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             service = SecurityImportService()
-            # Fix: Call the correct method name
             result = service.search_and_import_security(symbol)
 
             if result.get('error'):
-                return Response({'error': result['error']}, status=400)
+                return Response({'error': result['error']}, status=status.HTTP_400_BAD_REQUEST)
 
             return Response({
                 'security': SecuritySerializer(result['security']).data,
@@ -725,7 +733,7 @@ class SecurityViewSet(viewsets.ModelViewSet):
             logger.error(f"Error importing security {symbol}: {str(e)}")
             return Response(
                 {'error': f'Failed to import {symbol}. Please check the symbol and try again.'},
-                status=400
+                status=status.HTTP_400_BAD_REQUEST
             )
 
     @action(detail=True, methods=['post'])
