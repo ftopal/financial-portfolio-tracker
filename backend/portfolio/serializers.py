@@ -206,17 +206,12 @@ class TransactionSerializer(serializers.ModelSerializer):
                 # Get the transaction date
                 transaction_date = validated_data.get('transaction_date', timezone.now()).date()
 
-                # Get exchange rate
-                exchange_rate = CurrencyService.get_exchange_rate(
-                    currency,
-                    portfolio_currency,
-                    transaction_date
-                )
+                # Special handling for GBp to GBP conversion
+                if currency == 'GBp' and portfolio_currency == 'GBP':
+                    # Fixed conversion: 1 GBp = 0.01 GBP
+                    validated_data['exchange_rate'] = Decimal('0.01')
 
-                if exchange_rate:
-                    validated_data['exchange_rate'] = exchange_rate
-
-                    # Calculate base amount properly
+                    # Calculate base amount with the fixed rate
                     quantity = validated_data.get('quantity', 0)
                     price = validated_data.get('price', 0)
                     fees = validated_data.get('fees', 0)
@@ -235,7 +230,38 @@ class TransactionSerializer(serializers.ModelSerializer):
                     else:
                         total_amount = quantity * price
 
-                    validated_data['base_amount'] = total_amount * exchange_rate
+                    validated_data['base_amount'] = total_amount * Decimal('0.01')
+                else:
+                    # Regular currency exchange
+                    exchange_rate = CurrencyService.get_exchange_rate(
+                        currency,
+                        portfolio_currency,
+                        transaction_date
+                    )
+
+                    if exchange_rate:
+                        validated_data['exchange_rate'] = exchange_rate
+
+                        # Calculate base amount properly
+                        quantity = validated_data.get('quantity', 0)
+                        price = validated_data.get('price', 0)
+                        fees = validated_data.get('fees', 0)
+                        transaction_type = validated_data.get('transaction_type')
+
+                        if transaction_type == 'BUY':
+                            total_amount = (quantity * price) + fees
+                        elif transaction_type == 'SELL':
+                            total_amount = (quantity * price) - fees
+                        elif transaction_type == 'DIVIDEND':
+                            # For dividends, fees should be subtracted
+                            if 'dividend_per_share' in validated_data:
+                                total_amount = (quantity * validated_data['dividend_per_share']) - fees
+                            else:
+                                total_amount = (validated_data.get('price', 0) or 0) - fees
+                        else:
+                            total_amount = quantity * price
+
+                        validated_data['base_amount'] = total_amount * exchange_rate
 
         print(f"DEBUG: Final exchange_rate in validated_data: {validated_data.get('exchange_rate')}")
         print(f"DEBUG: Final base_amount in validated_data: {validated_data.get('base_amount')}")

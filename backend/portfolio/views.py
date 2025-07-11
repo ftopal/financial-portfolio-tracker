@@ -57,60 +57,38 @@ class CurrencyViewSet(viewsets.ReadOnlyModelViewSet):
 
             logger.info(f"Converting {amount} from {from_currency} to {to_currency} on {conversion_date}")
 
-            # Check if currencies are active
-            from_currency_active = Currency.objects.filter(code=from_currency, is_active=True).exists()
-            to_currency_active = Currency.objects.filter(code=to_currency, is_active=True).exists()
-
-            logger.info(
-                f"Currency status - {from_currency} active: {from_currency_active}, {to_currency} active: {to_currency_active}")
-
-            if not from_currency_active:
-                error_msg = f"Currency '{from_currency}' is not active or not found"
-                logger.error(error_msg)
-                return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
-
-            if not to_currency_active:
-                error_msg = f"Currency '{to_currency}' is not active or not found"
-                logger.error(error_msg)
-                return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
-
-            # Check for exchange rate in database
-            if conversion_date is None:
-                conversion_date = timezone.now().date()
-
-            logger.info(f"Looking for exchange rate on date: {conversion_date}")
-
-            # Direct rate check
-            direct_rate = ExchangeRate.objects.filter(
-                from_currency=from_currency,
-                to_currency=to_currency,
-                date__lte=conversion_date
-            ).order_by('-date').first()
-
-            if direct_rate:
-                logger.info(f"Found direct rate: {direct_rate.rate} (date: {direct_rate.date})")
+            # Special handling for GBp conversions
+            # Don't use .upper() because it will convert 'GBp' to 'GBP'
+            if from_currency == 'GBp' or to_currency == 'GBp':
+                # Use the normalization method directly
+                converted_amount = CurrencyService.convert_amount_with_normalization(
+                    amount, from_currency, to_currency, conversion_date
+                )
             else:
-                logger.info("No direct rate found")
+                # Check if currencies are active
+                from_currency_active = Currency.objects.filter(code=from_currency, is_active=True).exists()
+                to_currency_active = Currency.objects.filter(code=to_currency, is_active=True).exists()
 
-            # Inverse rate check
-            inverse_rate = ExchangeRate.objects.filter(
-                from_currency=to_currency,
-                to_currency=from_currency,
-                date__lte=conversion_date
-            ).order_by('-date').first()
+                logger.info(
+                    f"Currency status - {from_currency} active: {from_currency_active}, {to_currency} active: {to_currency_active}")
 
-            if inverse_rate:
-                logger.info(f"Found inverse rate: {inverse_rate.rate} (date: {inverse_rate.date})")
-            else:
-                logger.info("No inverse rate found")
+                if not from_currency_active:
+                    error_msg = f"Currency '{from_currency}' is not active or not found"
+                    logger.error(error_msg)
+                    return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Attempt conversion
-            converted_amount = CurrencyService.convert_amount(
-                amount,
-                from_currency,
-                to_currency,
-                conversion_date
-            )
+                if not to_currency_active:
+                    error_msg = f"Currency '{to_currency}' is not active or not found"
+                    logger.error(error_msg)
+                    return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
+
+                # Standard conversion
+                converted_amount = CurrencyService.convert_amount(
+                    amount,
+                    from_currency,
+                    to_currency,
+                    conversion_date
+                )
 
             logger.info(f"Conversion successful: {converted_amount}")
 
@@ -811,7 +789,14 @@ class TransactionViewSet(viewsets.ModelViewSet):
 
         if transaction.transaction_type == 'BUY':
             # Calculate total cost including fees
-            total_cost = transaction.total_value
+            # Use base_amount if available (already converted to portfolio currency)
+            if transaction.base_amount:
+                total_cost = transaction.base_amount
+            else:
+                # Fallback to calculating it
+                total_cost = transaction.total_value
+                if transaction.exchange_rate:
+                    total_cost = total_cost * transaction.exchange_rate
 
             # Check cash balance (use the recalculated balance)
             cash_account.recalculate_balances()

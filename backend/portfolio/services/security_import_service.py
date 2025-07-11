@@ -68,18 +68,28 @@ class SecurityImportService:
             # Get currency from Yahoo Finance
             currency = info.get('currency', 'USD')
 
-            # Handle UK stocks quoted in pence
+            # NEW: Check if this is a UK stock that should be marked as GBp
+            # Yahoo Finance returns GBP for UK stocks, but we need to check if prices are in pence
             if currency == 'GBP' and symbol.endswith('.L'):
-                # This is likely a UK stock quoted in pence
-                current_price = current_price / 100  # Convert pence to pounds
-                currency = 'GBP'  # Use GBP instead of GBp
+                # Check if the price appears to be in pence (typically > 100 for pence-based stocks)
+                # Also check the exchange name
+                exchange = info.get('exchange', '')
+                if 'LSE' in exchange or 'London' in exchange:
+                    # Most UK stocks on LSE are quoted in pence
+                    # We'll mark them as GBp but store the actual pound value
+                    display_currency = 'GBp'
+                    # Don't convert the price here - Yahoo already gives us the pence value
+                else:
+                    display_currency = 'GBP'
+            else:
+                display_currency = currency
 
             # Extract stock information with safe defaults
             stock_data = {
                 'symbol': info.get('symbol', symbol).upper(),
                 'name': info.get('longName') or info.get('shortName') or symbol,
                 'exchange': info.get('exchange', ''),
-                'currency': currency,
+                'currency': display_currency,
                 'country': info.get('country', ''),
                 'sector': info.get('sector', ''),
                 'industry': info.get('industry', ''),

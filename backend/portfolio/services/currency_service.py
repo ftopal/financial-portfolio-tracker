@@ -91,6 +91,10 @@ class CurrencyService:
         if amount == 0:
             return Decimal('0')
 
+        # Special handling for GBp conversions
+        if from_currency == 'GBp' or to_currency == 'GBp':
+            return cls.convert_amount_with_normalization(amount, from_currency, to_currency, date)
+
         # Validate currencies exist in our system
         if not cls._validate_currency(from_currency):
             raise ValueError(f"Currency '{from_currency}' is not supported or active")
@@ -107,6 +111,9 @@ class CurrencyService:
     @classmethod
     def _validate_currency(cls, currency_code):
         """Validate that a currency is active in our system"""
+        # Special case for GBp - it's valid even if not in the database
+        if currency_code == 'GBp':  # Remove .upper() here too
+            return True
         return Currency.objects.filter(code=currency_code, is_active=True).exists()
 
     @classmethod
@@ -270,16 +277,21 @@ class CurrencyService:
         if not currency_code:
             return 'USD', Decimal('1')
 
-        currency_code = currency_code.upper().strip()
+        # First strip whitespace
+        currency_code = currency_code.strip()
 
-        # Handle UK pence (GBp) -> convert to GBP
-        if currency_code == 'GBP':
+        # Handle UK pence (GBp) BEFORE uppercasing
+        if currency_code == 'GBp':
             return 'GBP', Decimal('0.01')  # 1 pence = 0.01 pounds
-        elif currency_code == 'GBP':
+
+        # Now uppercase for other checks
+        currency_code = currency_code.upper()
+
+        if currency_code == 'GBP':
             return 'GBP', Decimal('1')  # 1 pound = 1 pound
 
         # Handle other potential special cases
-        elif currency_code in ['USD', 'EUR']:
+        elif currency_code in ['USD', 'EUR', 'JPY', 'CHF', 'CAD', 'AUD', 'CNY', 'HKD', 'SGD', 'INR', 'BRL']:
             return currency_code, Decimal('1')
 
         # Default case
