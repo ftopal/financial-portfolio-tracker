@@ -559,7 +559,7 @@ const ConsolidatedPortfolioDetails = () => {
 
                     {/* Expanded Row - Transactions */}
                     <TableRow>
-                      <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={7}>
+                      <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={8}>
                         <Collapse in={expandedRows[asset.key]} timeout="auto" unmountOnExit>
                           <Box sx={{ margin: 2 }}>
                             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
@@ -584,6 +584,7 @@ const ConsolidatedPortfolioDetails = () => {
                                   <TableCell>Type</TableCell>
                                   <TableCell align="right">Quantity</TableCell>
                                   <TableCell align="right">Price</TableCell>
+                                  <TableCell align="right">Fees</TableCell>
                                   <TableCell align="right">Total</TableCell>
                                   <TableCell align="right">Gain/Loss</TableCell>
                                   <TableCell align="center">Action</TableCell>
@@ -638,6 +639,13 @@ const ConsolidatedPortfolioDetails = () => {
                                             </Typography>
                                           )}
                                         </Box>
+                                      )}
+                                    </TableCell>
+                                    <TableCell align="right">
+                                      {/* Show fees */}
+                                      {formatCurrency(
+                                        transaction.fees || 0,
+                                        transaction.currency || portfolio?.base_currency
                                       )}
                                     </TableCell>
                                     <TableCell align="right">

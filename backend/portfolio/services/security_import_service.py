@@ -1,5 +1,3 @@
-# backend/portfolio/services/security_import_service.py - Improved version
-
 import yfinance as yf
 from decimal import Decimal
 from django.utils import timezone
@@ -68,21 +66,66 @@ class SecurityImportService:
             # Get currency from Yahoo Finance
             currency = info.get('currency', 'USD')
 
-            # NEW: Check if this is a UK stock that should be marked as GBp
-            # Yahoo Finance returns GBP for UK stocks, but we need to check if prices are in pence
+            # IMPROVED: More intelligent currency detection for UK securities
+            display_currency = currency
+
             if currency == 'GBP' and symbol.endswith('.L'):
-                # Check if the price appears to be in pence (typically > 100 for pence-based stocks)
-                # Also check the exchange name
-                exchange = info.get('exchange', '')
-                if 'LSE' in exchange or 'London' in exchange:
-                    # Most UK stocks on LSE are quoted in pence
-                    # We'll mark them as GBp but store the actual pound value
-                    display_currency = 'GBp'
-                    # Don't convert the price here - Yahoo already gives us the pence value
+                # This is a UK security, but we need to determine if it's quoted in pence or pounds
+                exchange = info.get('exchange', '').lower()
+                quote_type = info.get('quoteType', '').upper()
+                security_name = (info.get('longName') or info.get('shortName') or symbol).upper()
+
+                # More precise logic for determining GBp vs GBP
+                is_lse_security = ('lse' in exchange or 'london' in exchange)
+
+                if is_lse_security:
+                    # Use multiple criteria to determine if this should be GBp (pence) or GBP (pounds)
+
+                    # ETFs and Trusts are more likely to be quoted in GBP (pounds)
+                    is_likely_gbp = (
+                            quote_type == 'ETF' or
+                            'ETF' in security_name or
+                            'TRUST' in security_name or
+                            'FUND' in security_name or
+                            'INVESTMENT' in security_name
+                    )
+
+                    # Individual stocks are more likely to be quoted in GBp (pence)
+                    is_likely_gbp_pence = (
+                            quote_type == 'EQUITY' or
+                            current_price > 50  # High prices often indicate pence pricing
+                    )
+
+                    # Price analysis: If price is very low (< 10), it's likely already in pounds
+                    # If price is high (> 50), it's likely in pence
+                    if current_price > 0:
+                        if current_price < 10 and is_likely_gbp:
+                            # Low price + ETF/Trust = likely quoted in GBP
+                            display_currency = 'GBP'
+                            logger.info(f"{symbol}: Using GBP (low price + ETF/Trust characteristics)")
+                        elif current_price > 50:
+                            # High price = likely quoted in pence
+                            display_currency = 'GBp'
+                            logger.info(f"{symbol}: Using GBp (high price suggests pence)")
+                        elif is_likely_gbp:
+                            # ETF/Trust with reasonable price = likely GBP
+                            display_currency = 'GBP'
+                            logger.info(f"{symbol}: Using GBP (ETF/Trust characteristics)")
+                        else:
+                            # Default for individual stocks = pence
+                            display_currency = 'GBp'
+                            logger.info(f"{symbol}: Using GBp (default for individual stocks)")
+                    else:
+                        # No price data, use type-based heuristics
+                        if is_likely_gbp:
+                            display_currency = 'GBP'
+                            logger.info(f"{symbol}: Using GBP (ETF/Trust, no price data)")
+                        else:
+                            display_currency = 'GBp'
+                            logger.info(f"{symbol}: Using GBp (default, no price data)")
                 else:
+                    # Not LSE, keep as GBP
                     display_currency = 'GBP'
-            else:
-                display_currency = currency
 
             # Extract stock information with safe defaults
             stock_data = {
@@ -135,7 +178,7 @@ class SecurityImportService:
 
             # Create security
             security = Security.objects.create(**stock_data)
-            logger.info(f"Successfully imported security: {security}")
+            logger.info(f"Successfully imported security: {security} with currency: {display_currency}")
 
             return {
                 'exists': False,
