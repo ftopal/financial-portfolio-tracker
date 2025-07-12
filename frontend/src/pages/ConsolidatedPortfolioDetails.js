@@ -43,6 +43,7 @@ import StockAutocomplete from '../components/StockAutocomplete';
 import CashManagement from '../components/CashManagement';
 import TransactionForm from '../components/TransactionForm';
 import PortfolioCurrencyView from '../components/PortfolioCurrencyView';
+import XIRRDisplay from '../components/XIRRDisplay';
 
 const ConsolidatedPortfolioDetails = () => {
   const { portfolioId } = useParams();
@@ -56,6 +57,9 @@ const ConsolidatedPortfolioDetails = () => {
   const [selectedSecurity, setSelectedSecurity] = useState(null);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null);
+  const [xirrData, setXirrData] = useState(null);
+  const [xirrLoading, setXirrLoading] = useState(false);
+  const [xirrError, setXirrError] = useState('');
 
   const fetchConsolidatedData = useCallback(async () => {
     try {
@@ -76,9 +80,30 @@ const ConsolidatedPortfolioDetails = () => {
     }
   }, [portfolioId]);
 
+  const fetchXIRRData = useCallback(async () => {
+    try {
+      setXirrLoading(true);
+      setXirrError('');
+
+      const response = await api.portfolios.getXIRR(portfolioId);
+      setXirrData(response.data);
+
+    } catch (err) {
+      console.error('Error fetching XIRR data:', err);
+      setXirrError('Failed to calculate XIRR');
+    } finally {
+      setXirrLoading(false);
+    }
+  }, [portfolioId]);
+
   useEffect(() => {
     fetchConsolidatedData();
-  }, [portfolioId, fetchConsolidatedData]);
+
+    // Fetch XIRR data in background
+    if (portfolioId) {
+      fetchXIRRData();
+    }
+  }, [portfolioId, fetchConsolidatedData, fetchXIRRData]);
 
   const toggleRow = (key) => {
     setExpandedRows(prev => ({
@@ -163,6 +188,7 @@ const ConsolidatedPortfolioDetails = () => {
     setSelectedSecurity(null);
     setEditingTransaction(null);
     fetchConsolidatedData();
+    fetchXIRRData();
   };
 
   const formatCurrency = (amount, currencyCode = null) => {
@@ -222,6 +248,16 @@ const ConsolidatedPortfolioDetails = () => {
       'SPLIT': 'secondary'
     };
     return colors[type] || 'default';
+  };
+
+  const getAssetXIRR = (asset) => {
+    if (!xirrData?.asset_xirrs) return null;
+
+    // Find XIRR for this asset's first transaction's security
+    const firstTransaction = asset.transactions?.[0];
+    if (!firstTransaction) return null;
+
+    return xirrData.asset_xirrs[firstTransaction.stock_id];
   };
 
   if (loading) {
@@ -393,6 +429,30 @@ const ConsolidatedPortfolioDetails = () => {
           )}
         </Grid>
 
+        {xirrData?.portfolio_xirr !== undefined && (
+          <Grid item xs={12} sm={6} md={3}>
+            <Card>
+              <CardContent>
+                <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                  <Box>
+                    <Typography color="text.secondary" gutterBottom variant="body2">
+                      Portfolio XIRR
+                    </Typography>
+                    <XIRRDisplay
+                      value={xirrData.portfolio_xirr}
+                      loading={xirrLoading}
+                      error={xirrError}
+                      variant="h5"
+                      showTooltip={true}
+                    />
+                  </Box>
+                  <ShowChartIcon color={xirrData.portfolio_xirr >= 0 ? 'success' : 'error'} />
+                </Box>
+              </CardContent>
+            </Card>
+          </Grid>
+        )}
+
         {/* Currency View */}
         <Grid item xs={12} lg={6}>
           {portfolio && (
@@ -446,6 +506,7 @@ const ConsolidatedPortfolioDetails = () => {
                   <TableCell align="right">Total Cost ({portfolio?.base_currency || 'USD'})</TableCell>
                   <TableCell align="right">Total Value ({portfolio?.base_currency || 'USD'})</TableCell>
                   <TableCell align="right">Gain/Loss ({portfolio?.base_currency || 'USD'})</TableCell>
+                  <TableCell align="right">XIRR</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -555,11 +616,19 @@ const ConsolidatedPortfolioDetails = () => {
                           </Box>
                         </Box>
                       </TableCell>
+                      <TableCell align="right">
+                        <XIRRDisplay
+                          value={getAssetXIRR(asset)}
+                          loading={xirrLoading}
+                          error={xirrError}
+                          showTooltip={true}
+                        />
+                      </TableCell>
                     </TableRow>
 
                     {/* Expanded Row - Transactions */}
                     <TableRow>
-                      <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={8}>
+                      <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={9}>
                         <Collapse in={expandedRows[asset.key]} timeout="auto" unmountOnExit>
                           <Box sx={{ margin: 2 }}>
                             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>

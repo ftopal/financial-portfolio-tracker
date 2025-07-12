@@ -158,6 +158,10 @@ export const portfolioAPI = {
     const params = targetCurrency ? { currency: targetCurrency } : {};
     return API.get(`portfolios/${id}/currency_exposure/`, { params });
   },
+  getXIRR: (portfolioId, forceRecalculate = false) => {
+    const params = forceRecalculate ? { force: 'true' } : {};
+    return API.get(`portfolios/${portfolioId}/xirr/`, { params });
+  },
 };
 
 // Cash Transaction services (NEW)

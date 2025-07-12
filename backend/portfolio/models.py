@@ -155,14 +155,6 @@ class Portfolio(models.Model):
                 else:
                     dividend_amount_base_currency = net_dividend
 
-                # Debug logging
-                print(f"DIVIDEND DEBUG: Symbol={transaction.security.symbol}")
-                print(f"  Gross dividend: {gross_dividend}")
-                print(f"  Fees: {transaction.fees}")
-                print(f"  Net dividend: {net_dividend}")
-                print(f"  Dividend amount (base currency): {dividend_amount_base_currency}")
-                print(f"  Total cost before dividend: {holdings[security_id]['total_cost_base_currency']}")
-
                 holdings[security_id]['total_dividends'] += dividend_amount_base_currency
 
                 # ✅ CRITICAL FIX: Dividends reduce the effective cost basis by NET amount
@@ -936,6 +928,54 @@ class CashTransaction(models.Model):
         if not self.balance_after:
             self.balance_after = self.cash_account.balance + self.amount
         super().save(*args, **kwargs)
+
+
+class PortfolioXIRRCache(models.Model):
+    """Cache for portfolio-level XIRR calculations"""
+    portfolio = models.OneToOneField(
+        Portfolio,
+        on_delete=models.CASCADE,
+        related_name='xirr_cache'
+    )
+    xirr_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        help_text="XIRR as decimal (e.g., 0.15 for 15%)"
+    )
+    last_transaction_id = models.IntegerField(
+        null=True,
+        help_text="ID of last transaction used in calculation"
+    )
+    calculation_date = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.portfolio.name} XIRR: {self.xirr_value}"
+
+
+class AssetXIRRCache(models.Model):
+    """Cache for individual asset XIRR calculations"""
+    portfolio = models.ForeignKey(Portfolio, on_delete=models.CASCADE)
+    security = models.ForeignKey(Security, on_delete=models.CASCADE)
+    xirr_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        help_text="XIRR as decimal (e.g., 0.15 for 15%)"
+    )
+    last_transaction_id = models.IntegerField(
+        null=True,
+        help_text="ID of last transaction for this asset used in calculation"
+    )
+    calculation_date = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['portfolio', 'security']
+
+    def __str__(self):
+        return f"{self.portfolio.name} - {self.security.symbol} XIRR: {self.xirr_value}"
 
 
 @receiver(post_save, sender=CashTransaction)

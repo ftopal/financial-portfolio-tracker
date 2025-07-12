@@ -643,6 +643,54 @@ class PortfolioViewSet(viewsets.ModelViewSet):
                 'error': f'Failed to check auto-deposit: {str(e)}'
             }, status=400)
 
+    @action(detail=True, methods=['get'])
+    def xirr(self, request, pk=None):
+        """Get XIRR calculations for portfolio and all assets"""
+        portfolio = self.get_object()
+
+        try:
+            from .services.xirr_service import XIRRService
+
+            # Check if force recalculation is requested
+            force_recalculate = request.query_params.get('force', '').lower() == 'true'
+
+            # Calculate portfolio XIRR
+            portfolio_xirr = XIRRService.get_portfolio_xirr(portfolio, force_recalculate)
+
+            # Calculate asset XIRRs
+            asset_xirrs = XIRRService.get_all_asset_xirrs(portfolio, force_recalculate)
+
+            # Convert Decimals to floats for JSON serialization
+            portfolio_xirr_float = float(portfolio_xirr) if portfolio_xirr is not None else None
+            asset_xirrs_float = {
+                str(security_id): float(xirr) if xirr is not None else None
+                for security_id, xirr in asset_xirrs.items()
+            }
+
+            return Response({
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'portfolio_xirr': portfolio_xirr_float,
+                'asset_xirrs': asset_xirrs_float,
+                'calculated_at': timezone.now().isoformat(),
+                'cache_info': {
+                    'force_recalculated': force_recalculate,
+                    'total_assets': len(asset_xirrs_float),
+                    'assets_with_xirr': len([x for x in asset_xirrs_float.values() if x is not None])
+                }
+            })
+
+        except Exception as e:
+            logger.error(f"XIRR calculation error for portfolio {portfolio.id}: {e}")
+            return Response(
+                {
+                    'error': 'XIRR calculation failed',
+                    'detail': str(e) if request.user.is_staff else 'Internal error',
+                    'portfolio_id': portfolio.id
+                },
+                status=500
+            )
+
 
 class SecurityViewSet(viewsets.ModelViewSet):
     queryset = Security.objects.all()

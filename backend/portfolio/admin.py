@@ -4,7 +4,7 @@ from django.shortcuts import render
 from django.urls import path
 from django.contrib import messages
 from .models import Security, Portfolio, Transaction, AssetCategory, PriceHistory, RealEstateAsset, \
-    PortfolioCashAccount, CashTransaction, UserPreferences
+    PortfolioCashAccount, CashTransaction, UserPreferences, PortfolioXIRRCache, AssetXIRRCache
 from .services.security_import_service import SecurityImportService
 from .models_currency import Currency, ExchangeRate
 import logging
@@ -202,3 +202,67 @@ class ExchangeRateAdmin(admin.ModelAdmin):
     search_fields = ['from_currency', 'to_currency']
     date_hierarchy = 'date'
     ordering = ['-date', 'from_currency', 'to_currency']
+
+
+# Add these admin classes to backend/portfolio/admin.py
+
+@admin.register(PortfolioXIRRCache)
+class PortfolioXIRRCacheAdmin(admin.ModelAdmin):
+    list_display = ['portfolio', 'xirr_percentage', 'calculation_date', 'last_transaction_id']
+    list_filter = ['calculation_date']
+    search_fields = ['portfolio__name', 'portfolio__user__username']
+    readonly_fields = ['calculation_date', 'created_at']
+
+    def xirr_percentage(self, obj):
+        if obj.xirr_value is not None:
+            return f"{obj.xirr_value * 100:.2f}%"
+        return "N/A"
+
+    xirr_percentage.short_description = 'XIRR %'
+
+    actions = ['recalculate_xirr']
+
+    def recalculate_xirr(self, request, queryset):
+        from .services.xirr_service import XIRRService
+
+        count = 0
+        for cache_obj in queryset:
+            XIRRService.get_portfolio_xirr(cache_obj.portfolio, force_recalculate=True)
+            count += 1
+
+        self.message_user(request, f"Recalculated XIRR for {count} portfolios.")
+
+    recalculate_xirr.short_description = "Recalculate XIRR"
+
+
+@admin.register(AssetXIRRCache)
+class AssetXIRRCacheAdmin(admin.ModelAdmin):
+    list_display = ['portfolio', 'security', 'xirr_percentage', 'calculation_date', 'last_transaction_id']
+    list_filter = ['calculation_date', 'security__security_type']
+    search_fields = ['portfolio__name', 'security__symbol', 'security__name']
+    readonly_fields = ['calculation_date', 'created_at']
+
+    def xirr_percentage(self, obj):
+        if obj.xirr_value is not None:
+            return f"{obj.xirr_value * 100:.2f}%"
+        return "N/A"
+
+    xirr_percentage.short_description = 'XIRR %'
+
+    actions = ['recalculate_xirr']
+
+    def recalculate_xirr(self, request, queryset):
+        from .services.xirr_service import XIRRService
+
+        count = 0
+        for cache_obj in queryset:
+            XIRRService.get_asset_xirr(
+                cache_obj.portfolio,
+                cache_obj.security,
+                force_recalculate=True
+            )
+            count += 1
+
+        self.message_user(request, f"Recalculated XIRR for {count} assets.")
+
+    recalculate_xirr.short_description = "Recalculate XIRR"
