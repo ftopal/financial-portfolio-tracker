@@ -32,12 +32,21 @@ const PortfolioCurrencyView = ({ portfolio }) => {
         // Extract currency codes from the response
         const currencies = response.data.results || response.data || [];
         const currencyCodes = currencies.map(currency => currency.code);
-        setAvailableCurrencies(currencyCodes);
+
+        // Filter out currencies that shouldn't appear in display dropdown
+        const displayCurrencies = currencyCodes.filter(currency => {
+          // Remove GBp (British Pence) as it's not a meaningful display currency
+          // GBp is a trading unit that converts to GBP, not a display currency
+          return currency !== 'GBp';
+        });
+
+        setAvailableCurrencies(displayCurrencies);
 
         console.log('Fetched currencies from API:', currencyCodes);
+        console.log('Filtered display currencies:', displayCurrencies);
       } catch (err) {
         console.error('Failed to fetch currencies:', err);
-        // Fallback to the most common currencies if API fails
+        // Fallback to the most common currencies if API fails (excluding GBp)
         setAvailableCurrencies(['USD', 'EUR', 'GBP']);
       } finally {
         setLoadingCurrencies(false);

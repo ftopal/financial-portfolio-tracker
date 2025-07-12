@@ -48,7 +48,14 @@ const CurrencySelector = ({
         throw new Error('Invalid response structure');
       }
 
-      setCurrencies(currencyData);
+      // Filter out GBp from transaction currency selections too
+      const filteredCurrencies = currencyData.filter(currency => {
+        // Remove GBp (British Pence) from currency selector dropdowns
+        // Users shouldn't manually select GBp - it should be handled automatically for UK securities
+        return currency.code !== 'GBp';
+      });
+
+      setCurrencies(filteredCurrencies);
       setError(null);
     } catch (err) {
       console.error('Failed to fetch currencies:', err);
@@ -58,11 +65,6 @@ const CurrencySelector = ({
         { code: 'USD', name: 'US Dollar', symbol: '$', decimal_places: 2 },
         { code: 'EUR', name: 'Euro', symbol: '€', decimal_places: 2 },
         { code: 'GBP', name: 'British Pound', symbol: '£', decimal_places: 2 },
-        { code: 'JPY', name: 'Japanese Yen', symbol: '¥', decimal_places: 0 },
-        { code: 'CAD', name: 'Canadian Dollar', symbol: 'C$', decimal_places: 2 },
-        { code: 'AUD', name: 'Australian Dollar', symbol: 'A$', decimal_places: 2 },
-        { code: 'CHF', name: 'Swiss Franc', symbol: 'CHF', decimal_places: 2 },
-        { code: 'CNY', name: 'Chinese Yuan', symbol: '¥', decimal_places: 2 },
       ]);
     } finally {
       setLoading(false);

@@ -84,6 +84,20 @@ const TransactionForm = ({
     }).format(amount || 0);
   };
 
+  const isFixedConversionRate = (fromCurrency, toCurrency) => {
+    /**
+     * Check if this is a fixed conversion rate that doesn't need manual override
+     * Examples:
+     * - GBp (British Pence) to GBP: always 1 GBp = 0.01 GBP
+     * - Add other fixed conversions here if needed
+     */
+    const from = fromCurrency?.trim();  // Don't use toUpperCase()
+    const to = toCurrency?.trim();
+
+    // GBp to GBP conversion is always fixed at 0.01
+    return (from === 'GBp' && to === 'GBP');
+  };
+
   const fetchPortfolio = useCallback(async () => {
     try {
       const response = await api.portfolios.get(portfolioId);
@@ -1093,7 +1107,9 @@ const TransactionForm = ({
           </Box>
 
           {/* Manual Exchange Rate and Base Amount Override */}
-          {formData.currency !== portfolioCurrency && formData.transaction_type !== 'SPLIT' && (
+          {formData.currency !== portfolioCurrency &&
+           formData.transaction_type !== 'SPLIT' &&
+           !isFixedConversionRate(formData.currency, portfolioCurrency) && (
             <Box sx={{ mb: 2 }}>
               <Typography variant="subtitle2" gutterBottom>
                 Currency Conversion Override (Optional)
@@ -1122,8 +1138,8 @@ const TransactionForm = ({
                   fullWidth
                   helperText={
                     autoBaseAmount
-                      ? `Auto calculated: ${autoBaseAmount.toFixed(2)}`
-                      : 'Leave blank to use exchange rate calculation'
+                      ? `Auto calculated: ${formatCurrency(autoBaseAmount, portfolioCurrency)}`
+                      : 'Leave blank to auto-calculate'
                   }
                 />
               </Box>
