@@ -315,24 +315,49 @@ class XIRRService:
 
     @classmethod
     def _should_recalculate_portfolio(cls, portfolio, cache_obj):
-        """Check if portfolio XIRR cache is stale - now based on CashTransaction"""
+        """Check if portfolio XIRR cache is stale - based on CashTransaction AND date"""
         from ..models import CashTransaction
+        from datetime import date
 
+        # Check if external cash transactions changed
         latest_cash_txn = CashTransaction.objects.filter(
             cash_account=portfolio.cash_account
         ).aggregate(max_id=Max('id'))['max_id']
 
-        return latest_cash_txn != cache_obj.last_transaction_id
+        if latest_cash_txn != cache_obj.last_transaction_id:
+            return True
+
+        # Also recalculate if cache is from a different day
+        # This ensures current portfolio value is up-to-date with latest prices
+        if cache_obj.calculation_date.date() != date.today():
+            logger.info(
+                f"Portfolio {portfolio.name}: Cache from {cache_obj.calculation_date.date()}, recalculating for {date.today()}")
+            return True
+
+        return False
 
     @classmethod
     def _should_recalculate_asset(cls, portfolio, security, cache_obj):
-        """Check if asset XIRR cache is stale"""
+        """Check if asset XIRR cache is stale - based on Transaction AND date"""
+        from datetime import date
+
+        # Check if transactions for this asset changed
         latest_txn = Transaction.objects.filter(
             portfolio=portfolio,
             security=security
         ).aggregate(max_id=Max('id'))['max_id']
 
-        return latest_txn != cache_obj.last_transaction_id
+        if latest_txn != cache_obj.last_transaction_id:
+            return True
+
+        # Also recalculate if cache is from a different day
+        # This ensures current asset value is up-to-date with latest prices
+        if cache_obj.calculation_date.date() != date.today():
+            logger.info(
+                f"Asset {security.symbol}: Cache from {cache_obj.calculation_date.date()}, recalculating for {date.today()}")
+            return True
+
+        return False
 
     @classmethod
     def _calculate_portfolio_xirr_weighted_fallback(cls, portfolio):

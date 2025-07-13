@@ -1161,15 +1161,6 @@ def portfolio_holdings_consolidated(request, portfolio_id):
 
     holdings = portfolio.get_holdings_cached()
 
-    # DEBUG: Let's see what get_holdings() actually calculated
-    for security_id, data in holdings.items():
-        if data['security'].symbol == 'GOOG':
-            print(f"DEBUG: get_holdings() calculated for GOOG:")
-            print(f"  total_cost_base_currency: {data.get('total_cost_base_currency', 'NOT_FOUND')}")
-            print(f"  avg_cost_base_currency: {data.get('avg_cost_base_currency', 'NOT_FOUND')}")
-            print(f"  quantity: {data.get('quantity', 'NOT_FOUND')}")
-            print(f"  total_dividends: {data.get('total_dividends', 'NOT_FOUND')}")
-
     consolidated_assets = []
     portfolio_currency = portfolio.base_currency or portfolio.currency
 

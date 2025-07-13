@@ -12,7 +12,6 @@ venv/
 .venv/
 
 # Django
-*.log
 *.pot
 *.pyc
 local_settings.py
@@ -29,3 +28,11 @@ staticfiles/
 # OS
 .DS_Store
 Thumbs.db
+
+# Log files (add to existing Django section)
+*.log
+logs/
+logs/*.log
+
+# Keep the logs directory but ignore the files
+!logs/.gitkeep

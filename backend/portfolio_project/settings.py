@@ -142,22 +142,93 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+        'xirr_format': {
+            'format': '[XIRR] {levelname} {asctime} {message}',
+            'style': '{',
+        },
+    },
     'handlers': {
+        # Console handler for development
+        'console': {
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+        # General application log file
         'file': {
             'level': 'INFO',
             'class': 'logging.FileHandler',
-            'filename': 'celery.log',
+            'filename': BASE_DIR / 'logs' / 'portfolio.log',
+            'formatter': 'verbose',
         },
-        'console': {
+        # XIRR-specific log file
+        'xirr_file': {
             'level': 'INFO',
-            'class': 'logging.StreamHandler',
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'logs' / 'xirr.log',
+            'formatter': 'xirr_format',
+        },
+        # Celery log file (keep existing)
+        'celery_file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'logs' / 'celery.log',
+            'formatter': 'verbose',
+        },
+        # Error-only log file
+        'error_file': {
+            'level': 'ERROR',
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'logs' / 'errors.log',
+            'formatter': 'verbose',
         },
     },
     'loggers': {
-        'celery': {
-            'handlers': ['file', 'console'],
+        # Root portfolio app logger
+        'portfolio': {
+            'handlers': ['console', 'file', 'error_file'],
             'level': 'INFO',
+            'propagate': False,
         },
+        # XIRR-specific logger
+        'portfolio.services.xirr_service': {
+            'handlers': ['console', 'xirr_file', 'error_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # Portfolio views logger
+        'portfolio.views': {
+            'handlers': ['console', 'file', 'error_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # Celery logger (keep existing)
+        'celery': {
+            'handlers': ['console', 'celery_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # Django root logger
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # Database queries (only in development - uncomment to see SQL queries)
+        # 'django.db.backends': {
+        #     'handlers': ['console'] if DEBUG else [],
+        #     'level': 'DEBUG' if DEBUG else 'INFO',
+        #     'propagate': False,
+        # },
     },
 }
 

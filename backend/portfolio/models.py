@@ -164,9 +164,6 @@ class Portfolio(models.Model):
                 # Also reduce the original currency cost by net dividend
                 holdings[security_id]['total_cost'] -= net_dividend
 
-                print(f"  Total cost after dividend: {holdings[security_id]['total_cost_base_currency']}")
-                print(f"  Quantity: {holdings[security_id]['quantity']}")
-
 
             elif transaction.transaction_type == 'SPLIT':
                 # Handle stock splits correctly
@@ -196,13 +193,6 @@ class Portfolio(models.Model):
                                     lot['quantity'] *= split_multiplier
                                     lot['remaining'] *= split_multiplier
                                     lot['price'] /= split_multiplier  # Price per share decreases proportionally
-
-                                # Debug logging
-                                print(f"SPLIT: {transaction.security.symbol} {transaction.split_ratio}")
-                                print(f"  Quantity before split: {quantity_before_split}")
-                                print(f"  Split multiplier: {split_multiplier}")
-                                print(f"  New total quantity: {new_total_quantity}")
-                                print(f"  Additional shares created: {new_total_quantity - quantity_before_split}")
 
                                 # NOTE: total_cost and total_cost_base_currency remain unchanged
                                 # because the total invested amount doesn't change in a split
