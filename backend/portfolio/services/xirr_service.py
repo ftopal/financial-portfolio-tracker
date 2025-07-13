@@ -241,85 +241,31 @@ class XIRRService:
 
     @classmethod
     def _get_transaction_cash_flow(cls, transaction):
-        """Convert transaction to cash flow amount - FIXED FEE HANDLING"""
-
-        # Get the exchange rate for base currency conversion
-        exchange_rate = float(transaction.exchange_rate or 1)
-
-        # Calculate base amount with CORRECT fee handling
-        if transaction.base_amount:
-            # Use existing base_amount if available
-            base_amount = round(float(transaction.base_amount), 2)
-        else:
-            # Calculate base amount manually with PROPER fee inclusion
+        """Use existing total_value property - much simpler and consistent!"""
+        try:
             if transaction.transaction_type == 'BUY':
-                # For BUY: total cost = (quantity × price) + fees
-                txn_amount = float(transaction.quantity) * float(transaction.price) + float(transaction.fees or 0)
-                base_amount = round(txn_amount * exchange_rate, 2)
-            elif transaction.transaction_type == 'SELL':
-                # For SELL: proceeds = (quantity × price) - fees
-                txn_amount = float(transaction.quantity) * float(transaction.price) - float(transaction.fees or 0)
-                base_amount = round(txn_amount * exchange_rate, 2)
-            elif transaction.transaction_type == 'DIVIDEND':
-                # For DIVIDEND: net dividend = amount - fees
-                if transaction.dividend_per_share:
-                    gross_dividend = float(transaction.quantity) * float(transaction.dividend_per_share)
-                else:
-                    gross_dividend = float(transaction.price or 0)
-                txn_amount = gross_dividend - float(transaction.fees or 0)
-                base_amount = round(txn_amount * exchange_rate, 2)
+                # Money out (negative) - use existing total_value property
+                return -float(transaction.total_value)
+            elif transaction.transaction_type in ['SELL', 'DIVIDEND']:
+                # Money in (positive) - use existing total_value property
+                return float(transaction.total_value)
             else:
-                # For other types, just use quantity × price
-                txn_amount = float(transaction.quantity) * float(transaction.price)
-                base_amount = round(txn_amount * exchange_rate, 2)
-
-        # Apply cash flow signs
-        if transaction.transaction_type == 'BUY':
-            # Money out (negative) - base_amount already includes fees
-            return -base_amount
-
-        elif transaction.transaction_type == 'SELL':
-            # Money in (positive) - base_amount already has fees subtracted
-            return base_amount
-
-        elif transaction.transaction_type == 'DIVIDEND':
-            # Income (positive) - base_amount already has fees subtracted
-            return base_amount
-
-        else:
-            # Skip other transaction types (SPLIT, etc.)
+                # Skip other transaction types (SPLIT, etc.)
+                return None
+        except Exception as e:
+            logger.error(f"Failed to get cash flow for transaction {transaction.id}: {e}")
             return None
 
     @classmethod
     def _calculate_portfolio_current_value(cls, portfolio):
-        """Calculate current portfolio value in portfolio base currency - FIXED VERSION"""
-        total_value = 0.0
-
-        # Get UNIQUE securities that have transactions
-        unique_security_ids = set(Transaction.objects.filter(
-            portfolio=portfolio
-        ).values_list('security_id', flat=True))
-
-        logger.info(f"Portfolio {portfolio.name}: Found {len(unique_security_ids)} unique securities")
-
-        for security_id in unique_security_ids:
-            try:
-                security = Security.objects.get(id=security_id)
-                asset_value = cls._calculate_asset_current_value(portfolio, security)
-                total_value += asset_value
-                logger.debug(f"Portfolio {portfolio.name}: {security.symbol} contributes £{asset_value}")
-            except Security.DoesNotExist:
-                logger.warning(f"Security {security_id} not found")
-                continue
-
-        # Add cash balance (already in portfolio base currency)
-        if hasattr(portfolio, 'cash_account') and portfolio.cash_account:
-            cash_balance = float(portfolio.cash_account.balance)
-            total_value += cash_balance
-            logger.debug(f"Portfolio {portfolio.name}: cash contributes £{cash_balance}")
-
-        logger.info(f"Portfolio {portfolio.name} total current value: £{total_value}")
-        return round(total_value, 2)
+        """Use existing get_total_value method - much simpler and consistent!"""
+        try:
+            total_value = float(portfolio.get_total_value())
+            logger.debug(f"Portfolio {portfolio.name} total value: £{total_value}")
+            return round(total_value, 2)
+        except Exception as e:
+            logger.error(f"Failed to get portfolio total value: {e}")
+            return 0.0
 
     @classmethod
     def _cache_portfolio_xirr(cls, portfolio, xirr_value):
