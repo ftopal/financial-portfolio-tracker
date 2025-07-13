@@ -342,91 +342,30 @@ class XIRRService:
 
     @classmethod
     def _calculate_asset_current_value(cls, portfolio, security):
-        """Calculate current value of a specific asset in portfolio base currency"""
+        """Calculate current value using holdings calculation with currency conversion"""
+        try:
+            holdings = portfolio.get_holdings()
 
-        # Calculate total quantity from transactions
-        transactions = Transaction.objects.filter(
-            portfolio=portfolio,
-            security=security
-        ).order_by('transaction_date')
+            if security.id in holdings:
+                holding_info = holdings[security.id]
 
-        total_quantity = 0.0
+                # Use the CONVERTED value that's already calculated
+                if 'current_value_base_currency' in holding_info:
+                    converted_value = float(holding_info['current_value_base_currency'])
+                    logger.debug(f"Asset {security.symbol}: Using converted value = £{converted_value}")
+                    return round(converted_value, 2)
+                else:
+                    # Fallback to raw value
+                    raw_value = float(holding_info['current_value'])
+                    logger.debug(f"Asset {security.symbol}: Using raw value = {raw_value}")
+                    return round(raw_value, 2)
+            else:
+                logger.debug(f"Asset {security.symbol}: Not found in holdings")
+                return 0.0
 
-        for txn in transactions:
-            if txn.transaction_type == 'BUY':
-                total_quantity += float(txn.quantity)
-            elif txn.transaction_type == 'SELL':
-                total_quantity -= float(txn.quantity)
-
-        if total_quantity <= 0:
+        except Exception as e:
+            logger.error(f"Failed to get current value for {security.symbol}: {e}")
             return 0.0
-
-        # Get the portfolio base currency
-        portfolio_currency = portfolio.base_currency or portfolio.currency
-
-        # CRITICAL FIX: For GBp/GBP securities, use transaction currency basis for consistency
-        # Check what currency the transactions are actually in
-        sample_txn = transactions.first()
-        transaction_currency = sample_txn.currency if sample_txn else security.currency
-
-        # Calculate current value
-        current_price = float(security.current_price)
-
-        # Handle GBp securities - they need conversion to portfolio currency
-        if transaction_currency == 'GBp' and security.currency.strip() == 'GBp':
-            # Both are in pence, calculate value in pence then convert to portfolio currency
-            current_value_in_pence = total_quantity * current_price
-            logger.info(
-                f"Asset {security.symbol}: {total_quantity} × {current_price} GBp = {current_value_in_pence} GBp")
-
-            # Convert to portfolio currency using transaction's exchange rate
-            if sample_txn and sample_txn.exchange_rate:
-                current_value_base_currency = current_value_in_pence * float(sample_txn.exchange_rate)
-                logger.info(
-                    f"Asset {security.symbol}: {current_value_in_pence} GBp × {sample_txn.exchange_rate} = {current_value_base_currency} {portfolio_currency}")
-                return round(current_value_base_currency, 2)
-
-        # Standard calculation for other currencies
-        current_value_security_currency = total_quantity * current_price
-
-        logger.debug(
-            f"Asset {security.symbol}: {total_quantity} × {current_price} = {current_value_security_currency} {security.currency}")
-
-        if security.currency != portfolio_currency:
-            try:
-                from ..services.currency_service import CurrencyService
-
-                # Get current exchange rate
-                current_rate = CurrencyService.get_exchange_rate(
-                    security.currency,
-                    portfolio_currency
-                )
-
-                if current_rate:
-                    # Convert manually to avoid type conflicts
-                    current_value_base_currency = current_value_security_currency * float(current_rate)
-                    logger.info(f"Asset {security.symbol}: {current_value_security_currency} {security.currency} "
-                                f"-> {current_value_base_currency} {portfolio_currency} (rate: {current_rate})")
-                    return round(current_value_base_currency, 2)
-                else:
-                    logger.warning(f"No current exchange rate found for {security.currency} to {portfolio_currency}")
-                    raise Exception("No current exchange rate available")
-
-            except Exception as e:
-                logger.warning(f"Currency conversion failed for {security.symbol}: {e}")
-                # Fallback: try using the most recent transaction's exchange rate
-                recent_txn = transactions.filter(exchange_rate__isnull=False).order_by('-transaction_date').first()
-                if recent_txn and recent_txn.exchange_rate:
-                    fallback_value = current_value_security_currency * float(recent_txn.exchange_rate)
-                    logger.info(f"Using fallback exchange rate {recent_txn.exchange_rate} for {security.symbol}: "
-                                f"{current_value_security_currency} -> {fallback_value}")
-                    return round(fallback_value, 2)
-                else:
-                    logger.error(f"No exchange rate available for {security.symbol}, using raw value")
-                    return round(current_value_security_currency, 2)
-        else:
-            logger.debug(f"Asset {security.symbol}: same currency, no conversion needed")
-            return round(current_value_security_currency, 2)
 
     @classmethod
     def _should_recalculate_portfolio(cls, portfolio, cache_obj):
