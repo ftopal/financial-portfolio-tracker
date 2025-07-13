@@ -369,50 +369,56 @@ class XIRRService:
 
     @classmethod
     def _calculate_portfolio_xirr(cls, portfolio):
-        """Calculate portfolio XIRR from actual cash movements (FIXED VERSION)"""
+        """Calculate portfolio XIRR from external cash flows only with correct signs"""
         from ..models import CashTransaction
 
         current_date = date.today()
 
-        # Get all cash transactions for this portfolio in chronological order
-        cash_transactions = CashTransaction.objects.filter(
-            cash_account=portfolio.cash_account
+        # Get only EXTERNAL cash movements (deposits/withdrawals)
+        external_cash_transactions = CashTransaction.objects.filter(
+            cash_account=portfolio.cash_account,
+            transaction_type__in=['DEPOSIT', 'WITHDRAWAL']
         ).order_by('transaction_date')
 
-        if not cash_transactions.exists():
-            logger.info(f"No cash transactions found for portfolio {portfolio.name}")
+        if not external_cash_transactions.exists():
+            logger.info(f"No external cash transactions found for portfolio {portfolio.name}")
             return None
 
         # Check minimum time span
-        first_date = cash_transactions.first().transaction_date.date()
+        first_date = external_cash_transactions.first().transaction_date.date()
         days_span = (current_date - first_date).days
         if days_span < cls.MIN_DAYS_SPAN:
             logger.info(f"Portfolio {portfolio.name}: Only {days_span} days of data, need {cls.MIN_DAYS_SPAN}")
             return None
 
-        # Build cash flows grouped by date
+        # Build cash flows with CORRECT signs for XIRR
         cash_flows_by_date = {}
 
-        for cash_txn in cash_transactions:
+        for cash_txn in external_cash_transactions:
             txn_date = cash_txn.transaction_date.date()
             amount = float(cash_txn.amount)
+
+            # CORRECT SIGNS for XIRR:
+            if cash_txn.transaction_type == 'DEPOSIT':
+                amount = -abs(amount)  # DEPOSITS are negative (money OUT of your bank)
+            elif cash_txn.transaction_type == 'WITHDRAWAL':
+                amount = abs(amount)  # WITHDRAWALS are positive (money TO your bank)
 
             if txn_date not in cash_flows_by_date:
                 cash_flows_by_date[txn_date] = 0.0
             cash_flows_by_date[txn_date] += amount
 
-        # FILTER OUT ZERO CASH FLOWS - this was the key fix
-        cash_flows_by_date = {date: amount for date, amount in cash_flows_by_date.items() if amount != 0.0}
-
-        # Add current portfolio value as final cash flow
+        # Add current portfolio value (positive - what you'd get back if liquidated)
         total_current_value = cls._calculate_portfolio_current_value(portfolio)
-
         if total_current_value > 0:
-            cash_flows_by_date[current_date] = total_current_value
+            cash_flows_by_date[current_date] = abs(total_current_value)
+
+        # Filter out zero cash flows
+        cash_flows_by_date = {date: amount for date, amount in cash_flows_by_date.items() if amount != 0.0}
 
         # Convert to lists for pyxirr
         if len(cash_flows_by_date) < 2:
-            logger.info(f"Portfolio {portfolio.name}: Not enough cash flow data points")
+            logger.info(f"Portfolio {portfolio.name}: Not enough external cash flow data points")
             return None
 
         # Sort by date and create parallel lists
@@ -420,16 +426,9 @@ class XIRRService:
         dates = [item[0] for item in sorted_items]
         cash_flows = [round(float(item[1]), 2) for item in sorted_items]
 
-        logger.info(f"Portfolio {portfolio.name} cash flows (cash-based): {list(zip(dates, cash_flows))}")
+        logger.info(f"Portfolio {portfolio.name} external cash flows: {list(zip(dates, cash_flows))}")
 
-        xirr_result = cls._calculate_xirr_with_fallback(cash_flows, dates, f"Portfolio {portfolio.name}")
-
-        # If cash-based XIRR fails, try weighted approach
-        if xirr_result is None:
-            logger.info(f"Cash-based XIRR failed for {portfolio.name}, trying weighted fallback")
-            xirr_result = cls._calculate_portfolio_xirr_weighted_fallback(portfolio)
-
-        return xirr_result
+        return cls._calculate_xirr_with_fallback(cash_flows, dates, f"Portfolio {portfolio.name}")
 
     @classmethod
     def _cache_asset_xirr(cls, portfolio, security, xirr_value):
