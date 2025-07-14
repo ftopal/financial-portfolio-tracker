@@ -3,15 +3,26 @@ import {
   Card,
   CardContent,
   Typography,
-  Select,
-  MenuItem,
+  Box,
   FormControl,
   InputLabel,
-  Box,
+  Select,
+  MenuItem,
   CircularProgress,
-  Divider
+  Divider,
+  Alert,
+  Tabs,
+  Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper
 } from '@mui/material';
-import { currencyAPI } from '../services/api';
+import { portfolioAPI, currencyAPI } from '../services/api';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 
 const PortfolioCurrencyView = ({ portfolio }) => {
   const [displayCurrency, setDisplayCurrency] = useState(portfolio?.base_currency || 'USD');
@@ -21,6 +32,10 @@ const PortfolioCurrencyView = ({ portfolio }) => {
   const [error, setError] = useState(null);
   const [availableCurrencies, setAvailableCurrencies] = useState([]);
   const [loadingCurrencies, setLoadingCurrencies] = useState(true);
+  const [activeTab, setActiveTab] = useState(0);
+  const [chartData, setChartData] = useState([]);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartError, setChartError] = useState('');
 
   // Fetch available currencies from the backend
   useEffect(() => {
@@ -56,11 +71,73 @@ const PortfolioCurrencyView = ({ portfolio }) => {
     fetchCurrencies();
   }, []);
 
+  // Fetch chart data when portfolio or display currency changes
+  useEffect(() => {
+    if (portfolio?.id) {
+      fetchChartData();
+    }
+  }, [portfolio?.id, displayCurrency]);
+
+  const fetchChartData = async () => {
+    try {
+      setChartLoading(true);
+      setChartError('');
+
+      const response = await portfolioAPI.getCurrencyExposureChart(
+        portfolio.id,
+        displayCurrency !== portfolio.base_currency ? displayCurrency : null
+      );
+
+      if (response.data.chart_data && response.data.chart_data.length > 0) {
+        const dataToUse = response.data.converted_chart_data || response.data.chart_data;
+        setChartData(dataToUse);
+      } else {
+        setChartData([]);
+        setChartError('No currency exposure data available');
+      }
+    } catch (err) {
+      console.error('Failed to fetch currency chart data:', err);
+      setChartError('Failed to load currency chart data');
+      setChartData([]);
+    } finally {
+      setChartLoading(false);
+    }
+  };
+
   const formatCurrency = (amount, currency) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: currency
     }).format(amount || 0);
+  };
+
+  const CustomTooltip = ({ active, payload }) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload;
+
+      return (
+        <Paper sx={{ p: 1, bgcolor: 'background.paper', border: 1, borderColor: 'divider' }}>
+          <Typography variant="body2" fontWeight="bold">
+            {data.currency}
+          </Typography>
+          <Typography variant="body2">
+            Original: {formatCurrency(data.original_amount, data.currency)}
+          </Typography>
+          <Typography variant="body2">
+            Converted: {formatCurrency(data.amount, displayCurrency)}
+          </Typography>
+          <Typography variant="body2">
+            Percentage: {data.percentage}%
+          </Typography>
+        </Paper>
+      );
+    }
+    return null;
+  };
+
+  const renderLabel = (entry) => {
+    if (entry.percentage < 3) return '';
+    return `${entry.currency}\n${entry.percentage}%`;
   };
 
   const formatExchangeRate = (rate, fromCurrency, toCurrency) => {
@@ -147,7 +224,7 @@ const PortfolioCurrencyView = ({ portfolio }) => {
     <Card>
       <CardContent>
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-          <Typography variant="h6">Portfolio Value</Typography>
+          <Typography variant="h6">Portfolio Value & Currency Exposure</Typography>
           <FormControl size="small" sx={{ minWidth: 120 }}>
             <InputLabel>Display Currency</InputLabel>
             <Select
@@ -171,72 +248,173 @@ const PortfolioCurrencyView = ({ portfolio }) => {
           </FormControl>
         </Box>
 
-        {loading ? (
-          <Box display="flex" justifyContent="center" py={2}>
-            <CircularProgress size={30} />
-          </Box>
-        ) : (
+        <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)} sx={{ mb: 2 }}>
+          <Tab label="Overview" />
+          <Tab label="Chart View" />
+        </Tabs>
+
+        {/* Tab 0: Your existing overview content */}
+        {activeTab === 0 && (
           <>
-            <Typography variant="h4" fontWeight="bold" gutterBottom>
-              {formatCurrency(displayValue, displayCurrency)}
-            </Typography>
-
-            {/* Show original value if converted */}
-            {displayCurrency !== portfolio.base_currency && !error && (
-              <Typography variant="body2" color="text.secondary" gutterBottom>
-                {formatCurrency(portfolioValue, portfolio.base_currency)} (base currency)
-              </Typography>
-            )}
-
-            {/* Show exchange rate if conversion occurred */}
-            {displayCurrency !== portfolio.base_currency && exchangeRate && !error && (
-              <Typography variant="caption" color="text.secondary" display="block" mb={2}>
-                Exchange Rate: {formatExchangeRate(exchangeRate, portfolio.base_currency, displayCurrency)}
-              </Typography>
-            )}
-
-            {error && (
-              <Typography variant="caption" color="error" display="block" mb={2}>
-                {error}
-              </Typography>
-            )}
-
-            <Divider sx={{ my: 2 }} />
-
-            <Box mt={2}>
-              <Typography variant="subtitle2" gutterBottom>
-                Currency Exposure
-              </Typography>
-              <Box display="flex" justifyContent="space-between" my={1}>
-                <Typography variant="body2">{portfolio.base_currency}:</Typography>
-                <Typography variant="body2" fontWeight="medium">
-                  {formatCurrency(portfolioValue, portfolio.base_currency)}
-                </Typography>
+            {loading ? (
+              <Box display="flex" justifyContent="center" py={2}>
+                <CircularProgress size={30} />
               </Box>
+            ) : (
+              <>
+                <Typography variant="h4" fontWeight="bold" gutterBottom>
+                  {formatCurrency(displayValue, displayCurrency)}
+                </Typography>
 
-              {/* Show converted value in exposure if different currency selected */}
-              {displayCurrency !== portfolio.base_currency && convertedValue && !error && (
-                <>
+                {displayCurrency !== portfolio.base_currency && !error && (
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    {formatCurrency(portfolioValue, portfolio.base_currency)} (base currency)
+                  </Typography>
+                )}
+
+                {displayCurrency !== portfolio.base_currency && exchangeRate && !error && (
+                  <Typography variant="caption" color="text.secondary" display="block" mb={2}>
+                    Exchange Rate: {formatExchangeRate(exchangeRate, portfolio.base_currency, displayCurrency)}
+                  </Typography>
+                )}
+
+                {error && (
+                  <Typography variant="caption" color="error" display="block" mb={2}>
+                    {error}
+                  </Typography>
+                )}
+
+                <Divider sx={{ my: 2 }} />
+
+                <Box mt={2}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Currency Exposure
+                  </Typography>
                   <Box display="flex" justifyContent="space-between" my={1}>
-                    <Typography variant="body2">{displayCurrency} (converted):</Typography>
+                    <Typography variant="body2">{portfolio.base_currency}:</Typography>
                     <Typography variant="body2" fontWeight="medium">
-                      {formatCurrency(convertedValue, displayCurrency)}
+                      {formatCurrency(portfolioValue, portfolio.base_currency)}
                     </Typography>
                   </Box>
-                  {/* Show exchange rate again in the exposure section for convenience */}
-                  {exchangeRate && (
-                    <Box display="flex" justifyContent="space-between" my={1}>
-                      <Typography variant="caption" color="text.secondary">
-                        Rate:
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {formatExchangeRate(exchangeRate, portfolio.base_currency, displayCurrency)}
-                      </Typography>
-                    </Box>
+
+                  {displayCurrency !== portfolio.base_currency && convertedValue && !error && (
+                    <>
+                      <Box display="flex" justifyContent="space-between" my={1}>
+                        <Typography variant="body2">{displayCurrency} (converted):</Typography>
+                        <Typography variant="body2" fontWeight="medium">
+                          {formatCurrency(convertedValue, displayCurrency)}
+                        </Typography>
+                      </Box>
+                      {exchangeRate && (
+                        <Box display="flex" justifyContent="space-between" my={1}>
+                          <Typography variant="caption" color="text.secondary">Rate:</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {formatExchangeRate(exchangeRate, portfolio.base_currency, displayCurrency)}
+                          </Typography>
+                        </Box>
+                      )}
+                    </>
                   )}
-                </>
-              )}
-            </Box>
+                </Box>
+              </>
+            )}
+          </>
+        )}
+
+        {/* Tab 1: New chart view */}
+        {activeTab === 1 && (
+          <>
+            {chartLoading ? (
+              <Box display="flex" justifyContent="center" py={4}>
+                <CircularProgress />
+              </Box>
+            ) : chartError ? (
+              <Alert severity="info">{chartError}</Alert>
+            ) : chartData.length > 0 ? (
+              <>
+                <Box height={300} mb={3}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={chartData}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        label={renderLabel}
+                        outerRadius={100}
+                        fill="#8884d8"
+                        dataKey={chartData[0]?.converted_amount !== undefined ? "converted_amount" : "amount"}
+                      >
+                        {chartData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<CustomTooltip />} />
+                      <Legend
+                        payload={chartData.map((item, index) => ({
+                          value: `${item.currency} (${item.percentage}%)`,
+                          type: 'square',
+                          color: item.color,
+                          id: index
+                        }))}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </Box>
+
+                <TableContainer component={Paper} variant="outlined">
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Currency</TableCell>
+                        <TableCell align="right">Amount</TableCell>
+                        <TableCell align="right">Percentage</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {chartData.map((row) => (
+                        <TableRow key={row.currency}>
+                          <TableCell>
+                            <Box display="flex" alignItems="center" gap={1}>
+                              <Box
+                                width={12}
+                                height={12}
+                                bgcolor={row.color}
+                                borderRadius="2px"
+                              />
+                              <Typography variant="body2" fontWeight="medium">
+                                {row.currency}
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell align="right">
+                            <Box>
+                              <Typography variant="body2">
+                                {formatCurrency(row.original_amount, row.currency)}
+                              </Typography>
+                              {row.currency !== displayCurrency && (
+                                <Typography variant="caption" color="text.secondary">
+                                  → {formatCurrency(row.amount, displayCurrency)}
+                                </Typography>
+                              )}
+                            </Box>
+                          </TableCell>
+                          <TableCell align="right">
+                            <Typography variant="body2">
+                              {row.percentage}%
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </>
+            ) : (
+              <Typography variant="body1" color="text.secondary" align="center">
+                No currency exposure data available
+              </Typography>
+            )}
           </>
         )}
       </CardContent>

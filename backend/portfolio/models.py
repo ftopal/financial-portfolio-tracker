@@ -53,7 +53,7 @@ class Portfolio(models.Model):
         if is_new:
             PortfolioCashAccount.objects.create(
                 portfolio=self,
-                currency=self.currency
+                currency=self.base_currency or self.currency  # Use base_currency first
             )
 
     def get_holdings(self):

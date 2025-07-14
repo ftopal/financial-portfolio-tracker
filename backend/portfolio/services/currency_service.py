@@ -188,7 +188,9 @@ class CurrencyService:
         total_value = Decimal('0')
 
         for holding in holdings.values():
-            security_currency = holding.get('security', {}).get('currency', 'USD')
+            # FIXED: holding['security'] is a Security MODEL OBJECT, not a dict
+            security = holding['security']  # This is a Security model instance
+            security_currency = security.currency or 'USD'  # Access currency attribute directly
             current_value = Decimal(str(holding['current_value']))
 
             if security_currency == target_currency:
@@ -219,26 +221,52 @@ class CurrencyService:
         """
         Calculate the currency exposure of a portfolio
         Returns dict with currency as key and exposure amount as value
+        Handles currency normalization (e.g., GBp -> GBP conversion)
         """
         exposure = {}
 
         # Get holdings currency exposure
         holdings = portfolio.get_holdings()
+        logger.info(f"Portfolio {portfolio.id} holdings count: {len(holdings)}")
+
         for holding in holdings.values():
-            currency = holding.get('security', {}).get('currency', 'USD')
+            security = holding['security']  # Security model instance
+            original_currency = security.currency or 'USD'
             current_value = Decimal(str(holding['current_value']))
 
-            if currency not in exposure:
-                exposure[currency] = Decimal('0')
-            exposure[currency] += current_value
+            # Normalize currency (converts GBp to GBP with proper factor)
+            normalized_currency, conversion_factor = cls.normalize_currency_code(original_currency)
 
-        # Add cash balance
+            # Convert the amount using the normalization factor
+            normalized_amount = current_value * conversion_factor
+            logger.info(
+                f"Security {security.symbol}: {original_currency} {current_value} -> {normalized_currency} {normalized_amount}")
+
+            if normalized_currency not in exposure:
+                exposure[normalized_currency] = Decimal('0')
+            exposure[normalized_currency] += normalized_amount
+
+        # Add cash balance - WITH DEBUGGING
         if hasattr(portfolio, 'cash_account'):
-            cash_currency = portfolio.cash_account.currency
-            if cash_currency not in exposure:
-                exposure[cash_currency] = Decimal('0')
-            exposure[cash_currency] += portfolio.cash_account.balance
+            cash_currency = portfolio.cash_account.currency or portfolio.currency
+            cash_balance = portfolio.cash_account.balance
 
+            logger.info(f"Cash account found: {cash_currency} {cash_balance}")
+
+            # Normalize cash currency too
+            normalized_cash_currency, cash_conversion_factor = cls.normalize_currency_code(cash_currency)
+            normalized_cash_amount = cash_balance * cash_conversion_factor
+
+            logger.info(
+                f"Cash normalized: {cash_currency} {cash_balance} -> {normalized_cash_currency} {normalized_cash_amount}")
+
+            if normalized_cash_currency not in exposure:
+                exposure[normalized_cash_currency] = Decimal('0')
+            exposure[normalized_cash_currency] += normalized_cash_amount
+        else:
+            logger.warning(f"Portfolio {portfolio.id} has no cash_account!")
+
+        logger.info(f"Final exposure: {exposure}")
         return exposure
 
     @classmethod

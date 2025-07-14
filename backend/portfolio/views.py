@@ -269,7 +269,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         from .models import PortfolioCashAccount, CashTransaction
         cash_account, created = PortfolioCashAccount.objects.get_or_create(
             portfolio=portfolio,
-            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
+            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency or portfolio.currency}
         )
 
         # Create cash transaction
@@ -304,7 +304,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         from .models import PortfolioCashAccount, CashTransaction
         cash_account, created = PortfolioCashAccount.objects.get_or_create(
             portfolio=portfolio,
-            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
+            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency or portfolio.currency}
         )
 
         if cash_account.balance < amount:
@@ -318,12 +318,13 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             amount=-amount,  # Negative for withdrawal
             description=request.data.get('description', 'Cash withdrawal'),
             transaction_date=request.data.get('transaction_date', timezone.now()),
-            balance_after=cash_account.balance - amount
         )
 
-        # Update cash account balance
-        cash_account.balance -= amount
-        cash_account.save()
+        # Recalculate all balances (same as deposit_cash method)
+        cash_account.recalculate_balances()
+
+        # Refresh transaction to get updated balance_after
+        transaction.refresh_from_db()
 
         serializer = CashTransactionSerializer(transaction)
         return Response(serializer.data, status=201)
@@ -494,6 +495,109 @@ class PortfolioViewSet(viewsets.ModelViewSet):
                 'exposure': exposure
             })
 
+    @action(detail=True, methods=['get'])
+    def currency_exposure_chart(self, request, pk=None):
+        """Get currency exposure data formatted for pie chart visualization"""
+        portfolio = self.get_object()
+
+        try:
+            # Get raw exposure with normalization (for GBp -> GBP conversion)
+            exposure = CurrencyService.get_currency_exposure(portfolio)
+
+            if not exposure:
+                return Response({
+                    'portfolio_id': portfolio.id,
+                    'portfolio_name': portfolio.name,
+                    'base_currency': portfolio.currency,
+                    'chart_data': [],
+                    'total_value': 0,
+                    'message': 'No currency exposure data available'
+                })
+
+            # Get target currency for conversion (or use portfolio base currency)
+            target_currency = request.query_params.get('currency')
+            if not target_currency:
+                target_currency = portfolio.base_currency or portfolio.currency
+
+            # Convert ALL amounts to target currency for proper percentage calculation
+            converted_exposure = {}
+            total_converted_value = Decimal('0')
+
+            for currency, amount in exposure.items():
+                if currency == target_currency:
+                    converted_amount = amount
+                else:
+                    converted_amount = CurrencyService.convert_amount(
+                        amount, currency, target_currency
+                    )
+
+                converted_exposure[currency] = {
+                    'original_amount': amount,
+                    'original_currency': currency,
+                    'converted_amount': converted_amount,
+                    'target_currency': target_currency
+                }
+                total_converted_value += converted_amount
+
+            # Format data for pie chart with CORRECT percentages
+            chart_data = []
+            for currency, data in converted_exposure.items():
+                # Calculate percentage based on CONVERTED amounts
+                percentage = float(
+                    (data['converted_amount'] / total_converted_value) * 100) if total_converted_value > 0 else 0
+
+                chart_data.append({
+                    'currency': currency,
+                    'amount': float(data['converted_amount']),  # Show converted amount
+                    'original_amount': float(data['original_amount']),  # Keep original for reference
+                    'percentage': round(percentage, 2),  # Correct percentage based on converted values
+                    'formatted_amount': f"{data['converted_amount']:,.2f}",
+                    'color': self._get_currency_color(currency)
+                })
+
+            # Sort by converted amount (largest first)
+            chart_data.sort(key=lambda x: x['amount'], reverse=True)
+
+            response_data = {
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'base_currency': portfolio.currency,
+                'target_currency': target_currency,
+                'chart_data': chart_data,
+                'total_value': float(total_converted_value),  # Total in target currency
+                'currency_count': len(chart_data),
+                'note': f'All amounts converted to {target_currency} for percentage calculation'
+            }
+
+            return Response(response_data)
+
+        except Exception as e:
+            logger.error(f"Error getting currency exposure chart data: {e}")
+            return Response(
+                {'error': f'Failed to get currency chart data: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _get_currency_color(self, currency):
+        """Get consistent color for each currency"""
+        # Predefined colors for common currencies
+        currency_colors = {
+            'USD': '#2196F3',  # Blue
+            'EUR': '#4CAF50',  # Green
+            'GBP': '#FF9800',  # Orange
+        }
+
+        # Return predefined color or generate one based on currency code
+        if currency in currency_colors:
+            return currency_colors[currency]
+        else:
+            # Generate a color based on currency code hash
+            import hashlib
+            hash_obj = hashlib.md5(currency.encode())
+            hash_hex = hash_obj.hexdigest()
+            # Use first 6 characters as color hex
+            return f"#{hash_hex[:6]}"
+
     @action(detail=True, methods=['post'])
     def recalculate_cash_balance(self, request, pk=None):
         """Recalculate cash balance for this portfolio based on all transactions"""
@@ -503,7 +607,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             from .models import PortfolioCashAccount
             cash_account, created = PortfolioCashAccount.objects.get_or_create(
                 portfolio=portfolio,
-                defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
+                defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency or portfolio.currency}
             )
 
             if created:
