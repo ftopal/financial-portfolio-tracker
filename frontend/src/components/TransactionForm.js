@@ -27,6 +27,7 @@ import CurrencySelector from './CurrencySelector';
 import CurrencyDisplay from './CurrencyDisplay';
 import api, { currencyAPI } from '../services/api';
 import debounce from 'lodash.debounce';
+import { formatCurrency } from '../utils/currencyUtils';
 
 const TransactionForm = ({
   open,
@@ -76,13 +77,6 @@ const TransactionForm = ({
   const [autoBaseAmount, setAutoBaseAmount] = useState(null); // Calculated base amount
   const [isExchangeRateManual, setIsExchangeRateManual] = useState(false); // Track if user modified rate
   const [isBaseAmountManual, setIsBaseAmountManual] = useState(false); // Track if user modified base amount
-
-  const formatCurrency = (amount, currency = 'USD') => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currency
-    }).format(amount || 0);
-  };
 
   const isFixedConversionRate = (fromCurrency, toCurrency) => {
     /**

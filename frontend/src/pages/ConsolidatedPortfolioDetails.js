@@ -44,6 +44,7 @@ import CashManagement from '../components/CashManagement';
 import TransactionForm from '../components/TransactionForm';
 import PortfolioCurrencyView from '../components/PortfolioCurrencyView';
 import XIRRDisplay from '../components/XIRRDisplay';
+import { formatCurrency } from '../utils/currencyUtils';
 
 const ConsolidatedPortfolioDetails = () => {
   const { portfolioId } = useParams();
@@ -189,14 +190,6 @@ const ConsolidatedPortfolioDetails = () => {
     setEditingTransaction(null);
     fetchConsolidatedData();
     fetchXIRRData();
-  };
-
-  const formatCurrency = (amount, currencyCode = null) => {
-    const code = currencyCode || portfolio?.base_currency || 'USD';
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: code
-    }).format(amount || 0);
   };
 
   const formatPercentage = (value) => {
