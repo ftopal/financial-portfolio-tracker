@@ -968,6 +968,300 @@ class AssetXIRRCache(models.Model):
         return f"{self.portfolio.name} - {self.security.symbol} XIRR: {self.xirr_value}"
 
 
+class UserPreferences(models.Model):
+    """User preferences for portfolio management"""
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='portfolio_preferences'
+    )
+
+    # Cash management preferences
+    auto_deposit_enabled = models.BooleanField(
+        default=True,
+        help_text="Automatically create deposits when buying with insufficient cash"
+    )
+    auto_deposit_mode = models.CharField(
+        max_length=20,
+        choices=[
+            ('EXACT', 'Deposit exact amount needed'),
+            ('SHORTFALL', 'Deposit only the shortfall'),
+        ],
+        default='EXACT'
+    )
+    show_cash_warnings = models.BooleanField(
+        default=True,
+        help_text="Show warnings when cash balance is low"
+    )
+
+    # Display preferences
+    default_currency = models.CharField(max_length=3, default='USD')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "User Preferences"
+
+    def __str__(self):
+        return f"{self.user.username} preferences"
+
+
+class PortfolioValueHistory(models.Model):
+    """
+    Daily portfolio value snapshots for historical performance tracking.
+
+    This model stores daily portfolio value calculations to enable
+    historical performance charts and time-series analysis.
+    """
+
+    # Core relationships
+    portfolio = models.ForeignKey(
+        Portfolio,
+        on_delete=models.CASCADE,
+        related_name='value_history'
+    )
+
+    # Date for this snapshot (stored as date, not datetime for daily aggregation)
+    date = models.DateField(db_index=True)
+
+    # Portfolio values in the portfolio's base currency
+    total_value = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        help_text="Total portfolio value including holdings and cash"
+    )
+    total_cost = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        help_text="Total cost basis of all holdings"
+    )
+    cash_balance = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        default=Decimal('0'),
+        help_text="Cash balance in portfolio"
+    )
+
+    # Portfolio composition metrics
+    holdings_count = models.IntegerField(
+        help_text="Number of unique securities with non-zero positions"
+    )
+
+    # Performance metrics (calculated fields)
+    unrealized_gains = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        help_text="Unrealized gains/losses (total_value - total_cost - cash_balance)"
+    )
+    total_return_pct = models.DecimalField(
+        max_digits=10,
+        decimal_places=4,
+        help_text="Total return percentage since inception"
+    )
+
+    # Metadata
+    calculation_source = models.CharField(
+        max_length=20,
+        default='daily_task',
+        choices=[
+            ('daily_task', 'Daily Automated Task'),
+            ('manual_calc', 'Manual Calculation'),
+            ('backfill', 'Historical Backfill'),
+            ('transaction_trigger', 'Transaction Trigger'),
+        ],
+        help_text="Source of this calculation"
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Ensure only one record per portfolio per date
+        unique_together = ['portfolio', 'date']
+        ordering = ['-date']
+
+        # Optimize for common queries
+        indexes = [
+            models.Index(fields=['portfolio', 'date']),
+            models.Index(fields=['portfolio', '-date']),  # For latest-first queries
+            models.Index(fields=['date']),  # For cross-portfolio date queries
+            models.Index(fields=['portfolio', 'calculation_source']),
+        ]
+
+        verbose_name = "Portfolio Value History"
+        verbose_name_plural = "Portfolio Value History"
+
+    def __str__(self):
+        return f"{self.portfolio.name} - {self.date} - ${self.total_value:,.2f}"
+
+    @property
+    def holdings_value(self):
+        """Calculate value of holdings (excluding cash)"""
+        return self.total_value - self.cash_balance
+
+    @property
+    def daily_return_pct(self):
+        """Calculate daily return percentage (requires previous day's data)"""
+        try:
+            previous_day = PortfolioValueHistory.objects.filter(
+                portfolio=self.portfolio,
+                date__lt=self.date
+            ).order_by('-date').first()
+
+            if previous_day:
+                return ((self.total_value - previous_day.total_value) / previous_day.total_value * 100)
+            return Decimal('0')
+        except:
+            return Decimal('0')
+
+    def save(self, *args, **kwargs):
+        """Calculate derived fields before saving"""
+        # Calculate unrealized gains
+        self.unrealized_gains = self.total_value - self.total_cost - self.cash_balance
+
+        # Calculate total return percentage
+        if self.total_cost > 0:
+            self.total_return_pct = (self.unrealized_gains / self.total_cost) * 100
+        else:
+            self.total_return_pct = Decimal('0')
+
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def calculate_portfolio_value_for_date(cls, portfolio, target_date):
+        """
+        Calculate portfolio value for a specific date.
+
+        Args:
+            portfolio: Portfolio instance
+            target_date: Date to calculate value for (datetime.date)
+
+        Returns:
+            dict: Portfolio value data for the date
+        """
+        from datetime import datetime
+        from .services.price_history_service import PriceHistoryService
+
+        # If target_date is a datetime, convert to date
+        if isinstance(target_date, datetime):
+            target_date = target_date.date()
+
+        # Get all transactions up to and including the target date
+        transactions = portfolio.transactions.filter(
+            transaction_date__date__lte=target_date
+        ).order_by('transaction_date')
+
+        # Calculate holdings as of the target date
+        holdings = {}
+        cash_balance = Decimal('0')
+
+        for transaction in transactions:
+            symbol = transaction.security.symbol
+
+            if symbol not in holdings:
+                holdings[symbol] = {
+                    'quantity': Decimal('0'),
+                    'total_cost': Decimal('0'),
+                    'security': transaction.security,
+                    'transactions': []
+                }
+
+            # Process transaction based on type
+            if transaction.transaction_type == 'BUY':
+                holdings[symbol]['quantity'] += transaction.quantity
+                holdings[symbol]['total_cost'] += transaction.base_amount or (transaction.quantity * transaction.price)
+                # Reduce cash for purchases
+                cash_balance -= transaction.base_amount or (transaction.quantity * transaction.price)
+
+            elif transaction.transaction_type == 'SELL':
+                # Calculate cost basis for sold shares (FIFO)
+                sold_quantity = transaction.quantity
+                if holdings[symbol]['quantity'] > 0:
+                    cost_per_share = holdings[symbol]['total_cost'] / holdings[symbol]['quantity']
+                    cost_reduction = min(sold_quantity, holdings[symbol]['quantity']) * cost_per_share
+                    holdings[symbol]['total_cost'] -= cost_reduction
+                    holdings[symbol]['quantity'] -= sold_quantity
+
+                # Add cash from sales
+                cash_balance += transaction.base_amount or (transaction.quantity * transaction.price)
+
+            elif transaction.transaction_type == 'DIVIDEND':
+                # Add dividend to cash
+                cash_balance += transaction.base_amount or (transaction.quantity * transaction.price)
+
+            # Add transaction to holdings for reference
+            holdings[symbol]['transactions'].append(transaction)
+
+        # Get cash account balance if exists
+        if hasattr(portfolio, 'cash_account'):
+            # Use cash account balance as it's more accurate than transaction-based calculation
+            cash_balance = portfolio.cash_account.balance
+
+        # Calculate current values using prices on target_date
+        total_value = cash_balance
+        total_cost = Decimal('0')
+        holdings_count = 0
+
+        for symbol, holding in holdings.items():
+            if holding['quantity'] > 0:
+                holdings_count += 1
+                total_cost += holding['total_cost']
+
+                # Get price for the target date
+                price_on_date = PriceHistoryService.get_price_for_date(
+                    holding['security'],
+                    target_date
+                )
+
+                if price_on_date:
+                    holding_value = holding['quantity'] * price_on_date
+                    total_value += holding_value
+
+        return {
+            'total_value': total_value,
+            'total_cost': total_cost,
+            'cash_balance': cash_balance,
+            'holdings_count': holdings_count,
+            'unrealized_gains': total_value - total_cost - cash_balance,
+            'total_return_pct': (
+                        (total_value - total_cost - cash_balance) / total_cost * 100) if total_cost > 0 else Decimal(
+                '0'),
+        }
+
+    @classmethod
+    def create_snapshot(cls, portfolio, target_date, calculation_source='daily_task'):
+        """
+        Create or update a portfolio value snapshot for a specific date.
+
+        Args:
+            portfolio: Portfolio instance
+            target_date: Date to create snapshot for
+            calculation_source: Source of calculation
+
+        Returns:
+            PortfolioValueHistory instance
+        """
+        # Calculate portfolio value for the date
+        value_data = cls.calculate_portfolio_value_for_date(portfolio, target_date)
+
+        # Create or update the snapshot
+        snapshot, created = cls.objects.update_or_create(
+            portfolio=portfolio,
+            date=target_date,
+            defaults={
+                'total_value': value_data['total_value'],
+                'total_cost': value_data['total_cost'],
+                'cash_balance': value_data['cash_balance'],
+                'holdings_count': value_data['holdings_count'],
+                'calculation_source': calculation_source,
+            }
+        )
+
+        return snapshot
+
+
 @receiver(post_save, sender=CashTransaction)
 def recalculate_on_save(sender, instance, created, **kwargs):
     """
@@ -1010,42 +1304,3 @@ def recalculate_on_delete(sender, instance, **kwargs):
     # Use Django's transaction.on_commit to ensure this runs after the delete is committed
     from django.db import transaction
     transaction.on_commit(safe_recalculate)
-
-
-class UserPreferences(models.Model):
-    """User preferences for portfolio management"""
-    user = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,
-        related_name='portfolio_preferences'
-    )
-
-    # Cash management preferences
-    auto_deposit_enabled = models.BooleanField(
-        default=True,
-        help_text="Automatically create deposits when buying with insufficient cash"
-    )
-    auto_deposit_mode = models.CharField(
-        max_length=20,
-        choices=[
-            ('EXACT', 'Deposit exact amount needed'),
-            ('SHORTFALL', 'Deposit only the shortfall'),
-        ],
-        default='EXACT'
-    )
-    show_cash_warnings = models.BooleanField(
-        default=True,
-        help_text="Show warnings when cash balance is low"
-    )
-
-    # Display preferences
-    default_currency = models.CharField(max_length=3, default='USD')
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name_plural = "User Preferences"
-
-    def __str__(self):
-        return f"{self.user.username} preferences"

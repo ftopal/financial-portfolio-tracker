@@ -271,3 +271,132 @@ class PriceHistoryService:
         except Exception as e:
             logger.error(f"Error detecting price gaps for {security.symbol}: {str(e)}")
             return []
+
+    @classmethod
+    def get_price_for_date(cls, security, target_date):
+        """
+        Get the closing price for a security on a specific date.
+
+        Args:
+            security: Security instance
+            target_date: Date to get price for (datetime.date)
+
+        Returns:
+            Decimal: Closing price for the date, or None if not found
+        """
+        from datetime import datetime
+        from django.utils import timezone
+
+        # Convert date to datetime if needed
+        if isinstance(target_date, datetime):
+            target_date = target_date.date()
+
+        # Try to get price for the exact date
+        try:
+            price_record = PriceHistory.objects.filter(
+                security=security,
+                date__date=target_date
+            ).first()
+
+            if price_record:
+                return price_record.close_price
+
+            # If not found, try to get the most recent price before this date
+            # This handles weekends and holidays
+            price_record = PriceHistory.objects.filter(
+                security=security,
+                date__date__lt=target_date
+            ).order_by('-date').first()
+
+            if price_record:
+                logger.debug(f"Using price from {price_record.date.date()} for {security.symbol} on {target_date}")
+                return price_record.close_price
+
+            # If no historical price found, use current price as fallback
+            if security.current_price:
+                logger.warning(f"No historical price found for {security.symbol} on {target_date}, using current price")
+                return security.current_price
+
+            logger.warning(f"No price data available for {security.symbol} on {target_date}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting price for {security.symbol} on {target_date}: {str(e)}")
+            return None
+
+    @classmethod
+    def get_price_range_for_portfolio(cls, portfolio, start_date, end_date):
+        """
+        Get all price data needed for portfolio calculations over a date range.
+
+        Args:
+            portfolio: Portfolio instance
+            start_date: Start date (datetime.date)
+            end_date: End date (datetime.date)
+
+        Returns:
+            dict: {security_id: {date: price}} mapping
+        """
+        from datetime import datetime
+
+        # Convert dates if needed
+        if isinstance(start_date, datetime):
+            start_date = start_date.date()
+        if isinstance(end_date, datetime):
+            end_date = end_date.date()
+
+        # Get all securities in the portfolio
+        securities = portfolio.transactions.values_list('security', flat=True).distinct()
+
+        # Fetch price data for all securities in the date range
+        price_data = PriceHistory.objects.filter(
+            security__in=securities,
+            date__date__gte=start_date,
+            date__date__lte=end_date
+        ).select_related('security').order_by('security_id', 'date')
+
+        # Organize data by security and date
+        result = {}
+        for price_record in price_data:
+            security_id = price_record.security_id
+            date_key = price_record.date.date()
+
+            if security_id not in result:
+                result[security_id] = {}
+
+            result[security_id][date_key] = price_record.close_price
+
+        return result
+
+    @classmethod
+    def get_latest_price_before_date(cls, security, target_date):
+        """
+        Get the latest available price before or on a specific date.
+
+        Args:
+            security: Security instance
+            target_date: Date to search before (datetime.date)
+
+        Returns:
+            tuple: (price, date) or (None, None) if not found
+        """
+        from datetime import datetime
+
+        # Convert date if needed
+        if isinstance(target_date, datetime):
+            target_date = target_date.date()
+
+        try:
+            price_record = PriceHistory.objects.filter(
+                security=security,
+                date__date__lte=target_date
+            ).order_by('-date').first()
+
+            if price_record:
+                return price_record.close_price, price_record.date.date()
+
+            return None, None
+
+        except Exception as e:
+            logger.error(f"Error getting latest price for {security.symbol} before {target_date}: {str(e)}")
+            return None, None

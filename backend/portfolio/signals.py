@@ -1,4 +1,7 @@
-from datetime import timezone, timedelta
+# Replace the content of backend/portfolio/signals.py with this fixed version
+
+from datetime import timedelta
+from django.utils import timezone  # Use Django's timezone instead of datetime.timezone
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from .models import Security, Transaction, PriceHistory
@@ -31,7 +34,7 @@ def trigger_backfill_on_historical_transaction(sender, instance, created, **kwar
     """
     if created:
         transaction_date = instance.transaction_date.date()
-        today = timezone.now().date()
+        today = timezone.now().date()  # Now this will work correctly
 
         # If transaction is more than 7 days old, we might need historical price data
         if (today - transaction_date).days > 7:
