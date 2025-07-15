@@ -5,8 +5,9 @@ from django.conf import settings
 from .models import Security, PriceHistory, Transaction
 import yfinance as yf
 from decimal import Decimal
-from datetime import timedelta
 from .services.currency_service import CurrencyService
+from .services.price_history_service import PriceHistoryService
+from datetime import date, timedelta, datetime, time
 import logging
 
 logger = logging.getLogger(__name__)
@@ -229,8 +230,8 @@ def send_price_alert(security_id, change_percentage):
 
 @shared_task
 def cleanup_old_price_history():
-    """Remove price history older than 1 year"""
-    cutoff_date = timezone.now() - timedelta(days=365)
+    """Remove price history older than 10 year"""
+    cutoff_date = timezone.now() - timedelta(days=10*365)
     deleted_count = PriceHistory.objects.filter(date__lt=cutoff_date).delete()[0]
     logger.info(f"Deleted {deleted_count} old price history records")
     return {'deleted': deleted_count}
@@ -375,6 +376,271 @@ def cleanup_old_exchange_rates():
     logger.info(f"Cleaned up {deleted_count} old exchange rate records (older than {cutoff_date})")
 
     return {'deleted': deleted_count, 'cutoff_date': str(cutoff_date)}
+
+
+@shared_task(bind=True, max_retries=3)
+def fetch_historical_prices_task(self, security_id, start_date=None, end_date=None, days_back=365, force_update=False):
+    """
+    Background task to fetch historical prices for a security
+
+    Args:
+        security_id: int, ID of the security
+        start_date: str (YYYY-MM-DD) or None
+        end_date: str (YYYY-MM-DD) or None
+        days_back: int, if start_date not provided, go back this many days
+        force_update: bool, whether to overwrite existing data
+    """
+    try:
+        security = Security.objects.get(id=security_id)
+
+        # Parse dates
+        if start_date:
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+        else:
+            start_date = date.today() - timedelta(days=days_back)
+
+        if end_date:
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+        else:
+            end_date = date.today()
+
+        logger.info(f"Starting historical price fetch for {security.symbol} ({start_date} to {end_date})")
+
+        # Fetch historical data
+        result = PriceHistoryService.bulk_fetch_historical_prices(
+            security, start_date, end_date, force_update
+        )
+
+        if result['success']:
+            logger.info(f"Successfully fetched historical prices for {security.symbol}: {result}")
+            return result
+        else:
+            logger.error(f"Failed to fetch historical prices for {security.symbol}: {result['error']}")
+            raise Exception(result['error'])
+
+    except Security.DoesNotExist:
+        logger.error(f"Security with id {security_id} not found")
+        raise
+    except Exception as exc:
+        logger.error(f"Error fetching historical prices for security {security_id}: {str(exc)}")
+        # Retry with exponential backoff
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@shared_task(bind=True, max_retries=2)
+def backfill_security_prices_task(self, security_id, days_back=365, force_update=False):
+    """
+    Background task to backfill missing historical prices for a security
+    """
+    try:
+        security = Security.objects.get(id=security_id)
+
+        logger.info(f"Starting price backfill for {security.symbol} ({days_back} days)")
+
+        result = PriceHistoryService.backfill_security_prices(
+            security, days_back, force_update
+        )
+
+        if result['success']:
+            logger.info(f"Successfully backfilled prices for {security.symbol}: {result}")
+        else:
+            logger.warning(f"Backfill completed with issues for {security.symbol}: {result}")
+
+        return result
+
+    except Security.DoesNotExist:
+        logger.error(f"Security with id {security_id} not found")
+        raise
+    except Exception as exc:
+        logger.error(f"Error backfilling prices for security {security_id}: {str(exc)}")
+        raise self.retry(exc=exc, countdown=120 * (self.request.retries + 1))
+
+
+@shared_task
+def backfill_all_securities_task(days_back=365, batch_size=10, force_update=False):
+    """
+    Backfill historical prices for all active securities
+
+    Args:
+        days_back: int, how many days back to fetch
+        batch_size: int, how many securities to process in parallel
+        force_update: bool, whether to overwrite existing data
+    """
+    try:
+        # Get all active securities that don't have recent price data
+        securities = Security.objects.filter(is_active=True)
+
+        # Filter to securities that actually need backfill
+        securities_needing_backfill = []
+
+        for security in securities:
+            # Check if we have recent price data
+            recent_price = PriceHistory.objects.filter(
+                security=security,
+                date__date__gte=date.today() - timedelta(days=7)
+            ).exists()
+
+            if not recent_price or force_update:
+                securities_needing_backfill.append(security)
+
+        logger.info(f"Found {len(securities_needing_backfill)} securities needing price backfill")
+
+        total_processed = 0
+        total_success = 0
+
+        # Process in batches to avoid overwhelming the API
+        for i in range(0, len(securities_needing_backfill), batch_size):
+            batch = securities_needing_backfill[i:i + batch_size]
+
+            # Submit batch of tasks
+            job_group = []
+            for security in batch:
+                job = backfill_security_prices_task.delay(
+                    security.id, days_back, force_update
+                )
+                job_group.append(job)
+
+            # Wait for batch to complete before starting next batch
+            for job in job_group:
+                try:
+                    result = job.get(timeout=300)  # 5 minute timeout per security
+                    total_processed += 1
+                    if result and result.get('success'):
+                        total_success += 1
+                except Exception as e:
+                    logger.error(f"Batch job failed: {str(e)}")
+                    total_processed += 1
+
+            # Rate limiting between batches
+            if i + batch_size < len(securities_needing_backfill):
+                time.sleep(30)  # 30 second pause between batches
+
+        logger.info(f"Backfill complete: {total_success}/{total_processed} securities processed successfully")
+
+        return {
+            'total_securities': len(securities_needing_backfill),
+            'processed': total_processed,
+            'successful': total_success,
+            'failed': total_processed - total_success
+        }
+
+    except Exception as e:
+        logger.error(f"Error in bulk backfill task: {str(e)}")
+        raise
+
+
+@shared_task
+def detect_and_fill_price_gaps_task(security_id=None, max_gap_days=7):
+    """
+    Detect and fill gaps in price data
+
+    Args:
+        security_id: int or None (if None, process all securities)
+        max_gap_days: int, maximum gap size to fill
+    """
+    try:
+        if security_id:
+            securities = [Security.objects.get(id=security_id)]
+        else:
+            securities = Security.objects.filter(is_active=True)
+
+        total_gaps_filled = 0
+        securities_processed = 0
+
+        for security in securities:
+            try:
+                result = PriceHistoryService.fill_price_gaps(security, max_gap_days)
+
+                if result['success']:
+                    total_gaps_filled += result.get('gaps_filled', 0)
+                    securities_processed += 1
+
+                    if result.get('gaps_filled', 0) > 0:
+                        logger.info(f"Filled {result['gaps_filled']} gaps for {security.symbol}")
+
+                # Rate limiting
+                time.sleep(1)
+
+            except Exception as e:
+                logger.error(f"Error filling gaps for {security.symbol}: {str(e)}")
+                continue
+
+        logger.info(f"Gap filling complete: {total_gaps_filled} gaps filled across {securities_processed} securities")
+
+        return {
+            'securities_processed': securities_processed,
+            'total_gaps_filled': total_gaps_filled
+        }
+
+    except Exception as e:
+        logger.error(f"Error in gap filling task: {str(e)}")
+        raise
+
+
+@shared_task
+def validate_all_price_data_task():
+    """
+    Validate price data integrity for all securities
+    """
+    try:
+        securities = Security.objects.filter(is_active=True)
+        validation_results = []
+
+        for security in securities:
+            result = PriceHistoryService.validate_price_data(security)
+            result['security_symbol'] = security.symbol
+            result['security_id'] = security.id
+            validation_results.append(result)
+
+        # Summary statistics
+        total_securities = len(validation_results)
+        valid_securities = sum(1 for r in validation_results if r.get('valid', False))
+        securities_with_gaps = sum(1 for r in validation_results if r.get('gaps', 0) > 0)
+
+        logger.info(f"Price data validation complete: {valid_securities}/{total_securities} securities valid, "
+                    f"{securities_with_gaps} securities have gaps")
+
+        return {
+            'total_securities': total_securities,
+            'valid_securities': valid_securities,
+            'securities_with_gaps': securities_with_gaps,
+            'details': validation_results
+        }
+
+    except Exception as e:
+        logger.error(f"Error in price data validation task: {str(e)}")
+        raise
+
+
+@shared_task(bind=True, max_retries=3)
+def auto_backfill_on_security_creation(self, security_id, days_back=365):
+    """
+    Automatically triggered when a new security is created
+    Backfills historical data for the new security
+    """
+    try:
+        security = Security.objects.get(id=security_id)
+
+        logger.info(f"Auto-backfilling price data for newly created security: {security.symbol}")
+
+        # Wait a bit to ensure the security is fully saved
+        time.sleep(2)
+
+        result = PriceHistoryService.backfill_security_prices(security, days_back)
+
+        if result['success']:
+            logger.info(f"Auto-backfill successful for {security.symbol}: {result}")
+        else:
+            logger.warning(f"Auto-backfill had issues for {security.symbol}: {result}")
+
+        return result
+
+    except Security.DoesNotExist:
+        logger.error(f"Security with id {security_id} not found for auto-backfill")
+        raise
+    except Exception as exc:
+        logger.error(f"Error in auto-backfill for security {security_id}: {str(exc)}")
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
 
 
 # Manual trigger tasks for testing

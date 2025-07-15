@@ -49,12 +49,28 @@ app.conf.beat_schedule = {
     # Cleanup tasks
     'cleanup-old-price-history': {
         'task': 'portfolio.tasks.cleanup_old_price_history',
-        'schedule': crontab(hour='2', minute='0'),  # Daily at 2 AM
+        'schedule': crontab(hour='4', minute='0'),  # Daily at 4 AM
+        # Note: Modify the cleanup task to keep more data (maybe 2-3 years instead of 1 year)
     },
     'cleanup-old-exchange-rates': {
         'task': 'portfolio.tasks.cleanup_old_exchange_rates',
         'schedule': crontab(hour='3', minute='0', day_of_week='0'),  # Weekly on Sunday at 3 AM
     },
+    'backfill-new-securities-daily': {
+        'task': 'portfolio.tasks.backfill_all_securities_task',
+        'schedule': crontab(hour='1', minute='0'),  # Daily at 1 AM
+        'args': (30, 5, False)  # 30 days back, batch size 5, don't force update
+    },
+    'detect-and-fill-price-gaps-weekly': {
+        'task': 'portfolio.tasks.detect_and_fill_price_gaps_task',
+        'schedule': crontab(hour='2', minute='30', day_of_week='0'),  # Sunday 2:30 AM
+        'args': (None, 7)  # All securities, max 7 day gaps
+    },
+    'validate-price-data-weekly': {
+        'task': 'portfolio.tasks.validate_all_price_data_task',
+        'schedule': crontab(hour='3', minute='0', day_of_week='1'),  # Monday 3 AM
+    },
+
 }
 
 app.conf.timezone = 'UTC'
