@@ -192,3 +192,5 @@ class Command(BaseCommand):
                 continue
 
         return rates_fetched
+
+#python manage.py fetch_historical_rates --start-date 2023-01-01 --end-date 2023-12-31

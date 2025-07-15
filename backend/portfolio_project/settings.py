@@ -247,6 +247,20 @@ USE_TZ = True
 DEFAULT_CURRENCY = 'USD'
 SUPPORTED_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'HKD', 'SGD', 'INR', 'BRL']
 
+# Portfolio History Settings
+PORTFOLIO_AUTO_RECALCULATION = True  # Enable automatic recalculation
+PORTFOLIO_SIGNAL_DEBUGGING = False   # Enable signal debugging
+PORTFOLIO_BATCH_RECALCULATION_DELAY = 300  # 5 minutes delay for batch operations
+PORTFOLIO_RECALCULATION_QUEUE = 'portfolio_history'  # Celery queue name
+PORTFOLIO_HISTORY_RETENTION_DAYS = 365  # Default retention for free users (1 year)
+PORTFOLIO_PREMIUM_RETENTION_DAYS = 3650  # Premium users (10 years)
+PORTFOLIO_MAX_CONCURRENT_CALCULATIONS = 5  # Max concurrent portfolio calculations
+PORTFOLIO_CALCULATION_TIMEOUT = 300  # 5 minutes timeout for calculations
+PORTFOLIO_BACKFILL_BATCH_SIZE = 50  # Number of days to process in each batch
+PORTFOLIO_CACHE_TIMEOUT = 300  # 5 minutes cache for portfolio calculations
+PORTFOLIO_PERFORMANCE_CACHE_TIMEOUT = 1800  # 30 minutes cache for performance data
+
+
 # Exchange rate API configuration
 EXCHANGE_RATE_PROVIDER = 'portfolio.services.currency_service.ExchangeRateAPIProvider'
 EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY')

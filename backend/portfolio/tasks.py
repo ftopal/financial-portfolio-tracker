@@ -2,12 +2,17 @@ from celery import shared_task
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.conf import settings
-from .models import Security, PriceHistory, Transaction
+from django.contrib.auth.models import User
+from django.db import transaction as db_transaction
+from .models import Security, PriceHistory, Transaction, Portfolio, PortfolioValueHistory
 import yfinance as yf
 from decimal import Decimal
 from .services.currency_service import CurrencyService
 from .services.price_history_service import PriceHistoryService
+from .services.portfolio_history_service import PortfolioHistoryService
 from datetime import date, timedelta, datetime, time
+from typing import List, Optional
+import time
 import logging
 
 logger = logging.getLogger(__name__)
@@ -643,9 +648,572 @@ def auto_backfill_on_security_creation(self, security_id, days_back=365):
         raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
 
 
+@shared_task(bind=True, max_retries=3)
+def calculate_daily_portfolio_snapshots(self, target_date: str = None):
+    """
+    Calculate daily portfolio value snapshots for all active portfolios
+
+    Args:
+        target_date: Date string (YYYY-MM-DD) or None for today
+
+    Returns:
+        Dict with batch operation results
+    """
+    try:
+        # Parse target date
+        if target_date:
+            try:
+                parsed_date = date.fromisoformat(target_date)
+            except ValueError:
+                parsed_date = date.today()
+        else:
+            parsed_date = date.today()
+
+        logger.info(f"Starting daily portfolio snapshots calculation for {parsed_date}")
+
+        # Use the service to calculate snapshots
+        result = PortfolioHistoryService.calculate_daily_snapshots(parsed_date)
+
+        if result['success']:
+            logger.info(f"Daily snapshots successful: {result['successful_snapshots']} portfolios processed")
+        else:
+            logger.error(f"Daily snapshots failed: {result.get('error')}")
+
+        return result
+
+    except Exception as exc:
+        logger.error(f"Error in daily portfolio snapshots: {str(exc)}")
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+
+@shared_task(bind=True, max_retries=3)
+def backfill_portfolio_history_task(self, portfolio_id: int, start_date: str,
+                                    end_date: str = None, force_update: bool = False):
+    """
+    Backfill portfolio history for a specific portfolio
+
+    Args:
+        portfolio_id: Portfolio ID
+        start_date: Start date string (YYYY-MM-DD)
+        end_date: End date string (YYYY-MM-DD) or None for today
+        force_update: Whether to overwrite existing data
+
+    Returns:
+        Dict with backfill operation results
+    """
+    try:
+        # Get portfolio
+        portfolio = Portfolio.objects.get(id=portfolio_id)
+
+        # Parse dates
+        parsed_start = date.fromisoformat(start_date)
+        parsed_end = date.fromisoformat(end_date) if end_date else date.today()
+
+        logger.info(f"Starting backfill for {portfolio.name} from {parsed_start} to {parsed_end}")
+
+        # Use the service to backfill
+        result = PortfolioHistoryService.backfill_portfolio_history(
+            portfolio, parsed_start, parsed_end, force_update
+        )
+
+        if result['success']:
+            logger.info(f"Backfill successful for {portfolio.name}: "
+                        f"{result['successful_snapshots']} snapshots created")
+        else:
+            logger.error(f"Backfill failed for {portfolio.name}: {result.get('error')}")
+
+        return result
+
+    except Portfolio.DoesNotExist:
+        logger.error(f"Portfolio with id {portfolio_id} not found")
+        return {
+            'success': False,
+            'error': f'Portfolio with id {portfolio_id} not found'
+        }
+    except Exception as exc:
+        logger.error(f"Error in portfolio backfill: {str(exc)}")
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+
+@shared_task(bind=True, max_retries=3)
+def bulk_portfolio_backfill_task(self, days_back: int = 30, force_update: bool = False):
+    """
+    Backfill portfolio history for all active portfolios
+
+    Args:
+        days_back: Number of days to backfill
+        force_update: Whether to overwrite existing data
+
+    Returns:
+        Dict with bulk backfill results
+    """
+    try:
+        # Get all active portfolios
+        portfolios = Portfolio.objects.filter(is_active=True)
+
+        if not portfolios.exists():
+            return {
+                'success': True,
+                'message': 'No active portfolios found',
+                'total_portfolios': 0
+            }
+
+        # Calculate date range
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days_back)
+
+        logger.info(f"Starting bulk backfill for {len(portfolios)} portfolios "
+                    f"from {start_date} to {end_date}")
+
+        # Use bulk processing service
+        result = PortfolioHistoryService.bulk_portfolio_processing(
+            list(portfolios), 'backfill',
+            start_date=start_date, end_date=end_date, force_update=force_update
+        )
+
+        if result['success']:
+            logger.info(f"Bulk backfill successful: {result['successful_operations']} portfolios processed")
+        else:
+            logger.error(f"Bulk backfill failed: {result.get('error')}")
+
+        return result
+
+    except Exception as exc:
+        logger.error(f"Error in bulk portfolio backfill: {str(exc)}")
+        raise self.retry(exc=exc, countdown=120 * (self.request.retries + 1))
+
+
+@shared_task(bind=True, max_retries=2)
+def portfolio_transaction_trigger_task(self, portfolio_id: int, transaction_date: str = None):
+    """
+    Trigger portfolio recalculation when transactions are added/modified
+
+    Args:
+        portfolio_id: Portfolio ID
+        transaction_date: Date string (YYYY-MM-DD) or None for full recalculation
+
+    Returns:
+        Dict with recalculation results
+    """
+    try:
+        # Get portfolio
+        portfolio = Portfolio.objects.get(id=portfolio_id)
+
+        # Parse transaction date if provided
+        parsed_date = None
+        if transaction_date:
+            try:
+                parsed_date = date.fromisoformat(transaction_date)
+            except ValueError:
+                logger.warning(f"Invalid transaction date format: {transaction_date}")
+
+        logger.info(f"Triggering recalculation for {portfolio.name} from {parsed_date or 'earliest transaction'}")
+
+        # Use the service to trigger recalculation
+        result = PortfolioHistoryService.trigger_portfolio_recalculation(
+            portfolio, parsed_date
+        )
+
+        if result['success']:
+            logger.info(f"Recalculation successful for {portfolio.name}: "
+                        f"{result.get('successful_snapshots', 0)} snapshots updated")
+        else:
+            logger.error(f"Recalculation failed for {portfolio.name}: {result.get('error')}")
+
+        return result
+
+    except Portfolio.DoesNotExist:
+        logger.error(f"Portfolio with id {portfolio_id} not found")
+        return {
+            'success': False,
+            'error': f'Portfolio with id {portfolio_id} not found'
+        }
+    except Exception as exc:
+        logger.error(f"Error in portfolio recalculation: {str(exc)}")
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+
+@shared_task(bind=True, max_retries=3)
+def detect_and_fill_portfolio_gaps_task(self, portfolio_id: int = None, max_gap_days: int = 30):
+    """
+    Detect and fill gaps in portfolio value history
+
+    Args:
+        portfolio_id: Specific portfolio ID or None for all portfolios
+        max_gap_days: Maximum gap size to attempt filling
+
+    Returns:
+        Dict with gap detection and filling results
+    """
+    try:
+        # Get portfolios to process
+        if portfolio_id:
+            portfolios = Portfolio.objects.filter(id=portfolio_id, is_active=True)
+        else:
+            portfolios = Portfolio.objects.filter(is_active=True)
+
+        if not portfolios.exists():
+            return {
+                'success': True,
+                'message': 'No portfolios found to process',
+                'total_portfolios': 0
+            }
+
+        overall_results = {
+            'success': True,
+            'total_portfolios': len(portfolios),
+            'portfolios_with_gaps': 0,
+            'gaps_filled': 0,
+            'details': []
+        }
+
+        for portfolio in portfolios:
+            try:
+                # Find gaps
+                gap_result = PortfolioHistoryService.get_portfolio_gaps(portfolio)
+
+                if gap_result['success'] and gap_result['total_missing'] > 0:
+                    overall_results['portfolios_with_gaps'] += 1
+
+                    # Filter gaps by max size
+                    gaps_to_fill = []
+                    missing_dates = gap_result['missing_dates']
+
+                    # Group consecutive dates
+                    if missing_dates:
+                        missing_dates.sort()
+                        current_gap = [missing_dates[0]]
+
+                        for i in range(1, len(missing_dates)):
+                            if missing_dates[i] - missing_dates[i - 1] == timedelta(days=1):
+                                current_gap.append(missing_dates[i])
+                            else:
+                                # Gap ended, process it
+                                if len(current_gap) <= max_gap_days:
+                                    gaps_to_fill.extend(current_gap)
+                                current_gap = [missing_dates[i]]
+
+                        # Process final gap
+                        if len(current_gap) <= max_gap_days:
+                            gaps_to_fill.extend(current_gap)
+
+                    # Fill gaps
+                    if gaps_to_fill:
+                        start_date = min(gaps_to_fill)
+                        end_date = max(gaps_to_fill)
+
+                        fill_result = PortfolioHistoryService.backfill_portfolio_history(
+                            portfolio, start_date, end_date, force_update=False
+                        )
+
+                        if fill_result['success']:
+                            overall_results['gaps_filled'] += fill_result['successful_snapshots']
+
+                        overall_results['details'].append({
+                            'portfolio_id': portfolio.id,
+                            'portfolio_name': portfolio.name,
+                            'gaps_found': gap_result['total_missing'],
+                            'gaps_filled': fill_result.get('successful_snapshots', 0),
+                            'success': fill_result['success']
+                        })
+                else:
+                    overall_results['details'].append({
+                        'portfolio_id': portfolio.id,
+                        'portfolio_name': portfolio.name,
+                        'gaps_found': 0,
+                        'gaps_filled': 0,
+                        'success': True
+                    })
+
+            except Exception as e:
+                logger.error(f"Error processing gaps for portfolio {portfolio.name}: {str(e)}")
+                overall_results['details'].append({
+                    'portfolio_id': portfolio.id,
+                    'portfolio_name': portfolio.name,
+                    'success': False,
+                    'error': str(e)
+                })
+
+        logger.info(f"Gap detection complete: {overall_results['portfolios_with_gaps']} portfolios had gaps, "
+                    f"{overall_results['gaps_filled']} gaps filled")
+
+        return overall_results
+
+    except Exception as exc:
+        logger.error(f"Error in gap detection task: {str(exc)}")
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+
+@shared_task(bind=True, max_retries=3)
+def validate_portfolio_history_task(self, portfolio_id: int = None):
+    """
+    Validate portfolio history data integrity
+
+    Args:
+        portfolio_id: Specific portfolio ID or None for all portfolios
+
+    Returns:
+        Dict with validation results
+    """
+    try:
+        # Get portfolios to validate
+        if portfolio_id:
+            portfolios = Portfolio.objects.filter(id=portfolio_id, is_active=True)
+        else:
+            portfolios = Portfolio.objects.filter(is_active=True)
+
+        if not portfolios.exists():
+            return {
+                'success': True,
+                'message': 'No portfolios found to validate',
+                'total_portfolios': 0
+            }
+
+        validation_results = {
+            'success': True,
+            'total_portfolios': len(portfolios),
+            'valid_portfolios': 0,
+            'portfolios_with_issues': 0,
+            'details': []
+        }
+
+        for portfolio in portfolios:
+            try:
+                # Get portfolio history
+                history_count = PortfolioValueHistory.objects.filter(
+                    portfolio=portfolio
+                ).count()
+
+                if history_count == 0:
+                    validation_results['portfolios_with_issues'] += 1
+                    validation_results['details'].append({
+                        'portfolio_id': portfolio.id,
+                        'portfolio_name': portfolio.name,
+                        'valid': False,
+                        'issues': ['No historical data found'],
+                        'history_count': 0
+                    })
+                    continue
+
+                # Check for gaps
+                gap_result = PortfolioHistoryService.get_portfolio_gaps(portfolio)
+
+                issues = []
+                if gap_result['success'] and gap_result['total_missing'] > 0:
+                    issues.append(f"{gap_result['total_missing']} missing dates")
+
+                # Check for negative values (potential data issues)
+                negative_values = PortfolioValueHistory.objects.filter(
+                    portfolio=portfolio,
+                    total_value__lt=0
+                ).count()
+
+                if negative_values > 0:
+                    issues.append(f"{negative_values} records with negative portfolio values")
+
+                # Check for inconsistent data
+                latest_snapshot = PortfolioValueHistory.objects.filter(
+                    portfolio=portfolio
+                ).order_by('-date').first()
+
+                if latest_snapshot and latest_snapshot.date < date.today() - timedelta(days=7):
+                    issues.append(f"Latest snapshot is from {latest_snapshot.date} (over 7 days old)")
+
+                if issues:
+                    validation_results['portfolios_with_issues'] += 1
+                else:
+                    validation_results['valid_portfolios'] += 1
+
+                validation_results['details'].append({
+                    'portfolio_id': portfolio.id,
+                    'portfolio_name': portfolio.name,
+                    'valid': len(issues) == 0,
+                    'issues': issues,
+                    'history_count': history_count,
+                    'coverage_percentage': gap_result.get('coverage_percentage', 0)
+                })
+
+            except Exception as e:
+                logger.error(f"Error validating portfolio {portfolio.name}: {str(e)}")
+                validation_results['portfolios_with_issues'] += 1
+                validation_results['details'].append({
+                    'portfolio_id': portfolio.id,
+                    'portfolio_name': portfolio.name,
+                    'valid': False,
+                    'issues': [f'Validation error: {str(e)}'],
+                    'history_count': 0
+                })
+
+        logger.info(f"Portfolio validation complete: {validation_results['valid_portfolios']} valid, "
+                    f"{validation_results['portfolios_with_issues']} with issues")
+
+        return validation_results
+
+    except Exception as exc:
+        logger.error(f"Error in portfolio validation task: {str(exc)}")
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+
+@shared_task
+def cleanup_old_portfolio_snapshots(retention_days: int = 365):
+    """
+    Cleanup old portfolio snapshots based on retention policy
+
+    Args:
+        retention_days: Number of days to retain (default: 1 year)
+
+    Returns:
+        Dict with cleanup results
+    """
+    try:
+        cutoff_date = date.today() - timedelta(days=retention_days)
+
+        # Count records to be deleted
+        old_records = PortfolioValueHistory.objects.filter(
+            date__lt=cutoff_date
+        )
+
+        record_count = old_records.count()
+
+        if record_count == 0:
+            return {
+                'success': True,
+                'message': 'No old records to cleanup',
+                'records_deleted': 0
+            }
+
+        # Delete old records
+        deleted_count, _ = old_records.delete()
+
+        logger.info(f"Cleaned up {deleted_count} old portfolio snapshots older than {cutoff_date}")
+
+        return {
+            'success': True,
+            'records_deleted': deleted_count,
+            'cutoff_date': cutoff_date.isoformat(),
+            'retention_days': retention_days
+        }
+
+    except Exception as e:
+        logger.error(f"Error in portfolio snapshot cleanup: {str(e)}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+@shared_task(bind=True, max_retries=3)
+def generate_portfolio_performance_report(self, portfolio_id: int, start_date: str, end_date: str = None):
+    """
+    Generate comprehensive portfolio performance report
+
+    Args:
+        portfolio_id: Portfolio ID
+        start_date: Start date string (YYYY-MM-DD)
+        end_date: End date string (YYYY-MM-DD) or None for today
+
+    Returns:
+        Dict with performance report data
+    """
+    try:
+        # Get portfolio
+        portfolio = Portfolio.objects.get(id=portfolio_id)
+
+        # Parse dates
+        parsed_start = date.fromisoformat(start_date)
+        parsed_end = date.fromisoformat(end_date) if end_date else date.today()
+
+        logger.info(f"Generating performance report for {portfolio.name} "
+                    f"from {parsed_start} to {parsed_end}")
+
+        # Get performance data
+        performance_result = PortfolioHistoryService.get_portfolio_performance(
+            portfolio, parsed_start, parsed_end
+        )
+
+        if not performance_result['success']:
+            return performance_result
+
+        # Add additional analysis
+        chart_data = performance_result['chart_data']
+
+        if len(chart_data) > 1:
+            # Calculate additional metrics
+            values = [d['total_value'] for d in chart_data]
+
+            # Calculate max drawdown
+            peak = values[0]
+            max_drawdown = 0
+
+            for value in values[1:]:
+                if value > peak:
+                    peak = value
+                else:
+                    drawdown = (peak - value) / peak * 100
+                    max_drawdown = max(max_drawdown, drawdown)
+
+            performance_result['performance_summary']['max_drawdown'] = max_drawdown
+
+            # Calculate Sharpe ratio (simplified)
+            daily_returns = performance_result['daily_returns']
+            if daily_returns and len(daily_returns) > 1:
+                avg_return = sum(daily_returns) / len(daily_returns)
+                return_std = (sum((r - avg_return) ** 2 for r in daily_returns) / len(daily_returns)) ** 0.5
+                sharpe_ratio = (avg_return / return_std) if return_std > 0 else 0
+                performance_result['performance_summary']['sharpe_ratio'] = sharpe_ratio
+
+        logger.info(f"Performance report generated for {portfolio.name}")
+
+        return performance_result
+
+    except Portfolio.DoesNotExist:
+        logger.error(f"Portfolio with id {portfolio_id} not found")
+        return {
+            'success': False,
+            'error': f'Portfolio with id {portfolio_id} not found'
+        }
+    except Exception as exc:
+        logger.error(f"Error generating performance report: {str(exc)}")
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+
 # Manual trigger tasks for testing
 @shared_task
 def test_celery():
     """Test task to verify Celery is working"""
     logger.info("Celery is working!")
     return "Celery task executed successfully!"
+
+
+@shared_task
+def test_portfolio_history_service():
+    """Test task to verify portfolio history service is working"""
+    try:
+        # Get a test portfolio
+        portfolio = Portfolio.objects.filter(is_active=True).first()
+
+        if not portfolio:
+            return {
+                'success': False,
+                'error': 'No active portfolios found for testing'
+            }
+
+        # Test daily snapshot
+        snapshot_result = PortfolioHistoryService.save_daily_snapshot(
+            portfolio, date.today(), 'test'
+        )
+
+        logger.info(f"Portfolio history service test completed: {snapshot_result['success']}")
+
+        return {
+            'success': True,
+            'test_portfolio': portfolio.name,
+            'snapshot_result': snapshot_result
+        }
+
+    except Exception as e:
+        logger.error(f"Error in portfolio history service test: {str(e)}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
