@@ -14,17 +14,18 @@ Key Features:
 """
 
 from decimal import Decimal
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from typing import Dict, List, Optional, Tuple
 import logging
 from django.db import transaction as db_transaction
-from django.db.models import Q, Sum, F
+from django.db.models import Q, Sum, F, Max, Min
 from django.utils import timezone
 from django.core.cache import cache
+import statistics
 
 from ..models import (
     Portfolio, PortfolioValueHistory, Security, Transaction,
-    PriceHistory
+    PriceHistory, PortfolioCashAccount
 )
 from .price_history_service import PriceHistoryService
 
@@ -59,6 +60,14 @@ class PortfolioHistoryService:
             holdings = {}
             cash_balance = Decimal('0')
 
+            # Get initial cash balance if cash account exists
+            try:
+                cash_account = PortfolioCashAccount.objects.get(portfolio=portfolio)
+                cash_balance = cash_account.balance
+            except PortfolioCashAccount.DoesNotExist:
+                # Portfolio doesn't have cash account, start with zero
+                cash_balance = Decimal('0')
+
             for transaction in transactions:
                 if transaction.transaction_type in ['BUY', 'SELL']:
                     security = transaction.security
@@ -76,58 +85,51 @@ class PortfolioHistoryService:
                         )
                         cash_balance -= (transaction.quantity * transaction.price)
                     else:  # SELL
-                        # Calculate average cost per share
+                        # Calculate average cost for sold shares
                         if holdings[security.id]['quantity'] > 0:
-                            avg_cost = (
-                                    holdings[security.id]['total_cost'] /
-                                    holdings[security.id]['quantity']
-                            )
-                            sold_cost = transaction.quantity * avg_cost
-                            holdings[security.id]['total_cost'] -= sold_cost
+                            avg_cost = (holdings[security.id]['total_cost'] /
+                                        holdings[security.id]['quantity'])
+                            cost_reduction = avg_cost * transaction.quantity
+                            holdings[security.id]['total_cost'] -= cost_reduction
 
                         holdings[security.id]['quantity'] -= transaction.quantity
                         cash_balance += (transaction.quantity * transaction.price)
 
-                        # Remove holdings with zero quantity
+                        # Remove zero or negative positions
                         if holdings[security.id]['quantity'] <= 0:
                             del holdings[security.id]
 
                 elif transaction.transaction_type == 'DIVIDEND':
-                    # Handle dividends - add to cash
-                    cash_balance += (transaction.quantity * transaction.price)
-                # Note: Your model doesn't seem to have DEPOSIT/WITHDRAWAL transaction types
-                # so I'm removing those cases
+                    cash_balance += transaction.quantity * transaction.price
+                elif transaction.transaction_type in ['DEPOSIT', 'WITHDRAWAL']:
+                    cash_balance += transaction.quantity * transaction.price
 
-            # Get cash account balance instead of calculating from transactions
-            try:
-                if hasattr(portfolio, 'cash_account'):
-                    cash_balance = portfolio.cash_account.balance
-                else:
-                    cash_balance = Decimal('0')
-            except:
-                cash_balance = Decimal('0')
-
-            # Calculate current market value of holdings
+            # Calculate current value of holdings
             total_value = cash_balance
-            total_cost = cash_balance
-            holdings_count = len(holdings)
+            total_cost = Decimal('0')
+            holdings_count = 0
 
             for holding_data in holdings.values():
-                if holding_data['quantity'] > 0:
-                    # Get price for the target date
-                    price = PriceHistoryService.get_price_for_date(
-                        holding_data['security'], target_date
+                security = holding_data['security']
+                quantity = holding_data['quantity']
+                cost = holding_data['total_cost']
+
+                if quantity > 0:
+                    # Get current price for the security
+                    current_price = PriceHistoryService.get_price_for_date(
+                        security, target_date
                     )
 
-                    if price:
-                        market_value = holding_data['quantity'] * price
+                    if current_price and current_price > 0:
+                        market_value = quantity * current_price
                         total_value += market_value
-                        total_cost += holding_data['total_cost']
+                        total_cost += cost
+                        holdings_count += 1
 
-            # Calculate performance metrics
-            unrealized_gains = total_value - total_cost
+            # Calculate derived metrics
+            unrealized_gains = total_value - total_cost - cash_balance
             total_return_pct = (
-                ((total_value - total_cost) / total_cost * 100)
+                (unrealized_gains / total_cost * 100)
                 if total_cost > 0 else Decimal('0')
             )
 
@@ -219,147 +221,126 @@ class PortfolioHistoryService:
             target_date: Date for snapshots (defaults to today)
 
         Returns:
-            Dict with batch operation results
+            Dict with bulk operation results
         """
         if target_date is None:
             target_date = date.today()
 
         try:
-            # Get all portfolios (assuming active by default)
-            portfolios = Portfolio.objects.all()
-
-            results = {
-                'success': True,
-                'date': target_date,
-                'total_portfolios': len(portfolios),
-                'successful_snapshots': 0,
-                'failed_snapshots': 0,
-                'details': []
-            }
+            portfolios = Portfolio.objects.all()  # Get all portfolios since is_active doesn't exist
+            successful_snapshots = 0
+            failed_snapshots = 0
+            results = []
 
             for portfolio in portfolios:
-                snapshot_result = PortfolioHistoryService.save_daily_snapshot(
-                    portfolio, target_date, 'daily'
+                result = PortfolioHistoryService.save_daily_snapshot(
+                    portfolio, target_date, 'daily_batch'
                 )
 
-                if snapshot_result['success']:
-                    results['successful_snapshots'] += 1
+                if result['success']:
+                    successful_snapshots += 1
                 else:
-                    results['failed_snapshots'] += 1
+                    failed_snapshots += 1
 
-                results['details'].append({
+                results.append({
                     'portfolio_id': portfolio.id,
                     'portfolio_name': portfolio.name,
-                    'success': snapshot_result['success'],
-                    'error': snapshot_result.get('error', 'Unknown error') if not snapshot_result['success'] else None
+                    'success': result['success'],
+                    'created': result.get('created', False),
+                    'error': result.get('error')
                 })
 
             logger.info(f"Daily snapshots complete for {target_date}: "
-                        f"{results['successful_snapshots']}/{results['total_portfolios']} successful")
+                        f"{successful_snapshots}/{len(portfolios)} successful")
 
-            return results
+            return {
+                'success': True,
+                'target_date': target_date,
+                'total_portfolios': len(portfolios),
+                'successful_snapshots': successful_snapshots,
+                'failed_snapshots': failed_snapshots,
+                'results': results
+            }
 
         except Exception as e:
-            logger.error(f"Error in daily snapshots calculation: {str(e)}")
+            logger.error(f"Error calculating daily snapshots for {target_date}: {str(e)}")
             return {
                 'success': False,
                 'error': str(e),
-                'date': target_date
+                'target_date': target_date
             }
 
     @staticmethod
     def backfill_portfolio_history(portfolio: Portfolio, start_date: date,
                                    end_date: date = None, force_update: bool = False) -> Dict:
         """
-        Backfill historical portfolio data
+        Backfill portfolio history for date range
 
         Args:
             portfolio: Portfolio instance
             start_date: Start date for backfill
             end_date: End date for backfill (defaults to today)
-            force_update: Whether to overwrite existing data
+            force_update: Force update existing snapshots
 
         Returns:
-            Dict with backfill operation results
+            Dict with backfill results
         """
         if end_date is None:
             end_date = date.today()
 
         try:
-            # Validate date range
-            if start_date > end_date:
-                return {
-                    'success': False,
-                    'error': 'Start date must be before end date'
-                }
-
-            # Get existing snapshots if not forcing update
-            existing_snapshots = set()
-            if not force_update:
-                existing_snapshots = set(
-                    PortfolioValueHistory.objects.filter(
-                        portfolio=portfolio,
-                        date__gte=start_date,
-                        date__lte=end_date
-                    ).values_list('date', flat=True)
-                )
-
             # Generate date range (business days only)
             current_date = start_date
             dates_to_process = []
 
             while current_date <= end_date:
-                # Skip weekends for stock markets
-                if current_date.weekday() < 5:  # Monday = 0, Sunday = 6
-                    if force_update or current_date not in existing_snapshots:
+                if current_date.weekday() < 5:  # Monday = 0, Friday = 4
+                    # Check if snapshot already exists (unless force update)
+                    if force_update or not PortfolioValueHistory.objects.filter(
+                            portfolio=portfolio, date=current_date
+                    ).exists():
                         dates_to_process.append(current_date)
                 current_date += timedelta(days=1)
 
-            results = {
+            successful_snapshots = 0
+            failed_snapshots = 0
+            skipped_snapshots = 0
+
+            for date_to_process in dates_to_process:
+                result = PortfolioHistoryService.save_daily_snapshot(
+                    portfolio, date_to_process, 'backfill'
+                )
+
+                if result['success']:
+                    successful_snapshots += 1
+                else:
+                    failed_snapshots += 1
+
+            # Count existing snapshots that were skipped
+            if not force_update:
+                existing_snapshots = PortfolioValueHistory.objects.filter(
+                    portfolio=portfolio,
+                    date__gte=start_date,
+                    date__lte=end_date
+                ).count()
+                skipped_snapshots = existing_snapshots - successful_snapshots
+
+            logger.info(f"Backfill complete for {portfolio.name} ({start_date} to {end_date}): "
+                        f"{successful_snapshots}/{len(dates_to_process)} successful")
+
+            return {
                 'success': True,
                 'portfolio': portfolio.name,
                 'start_date': start_date,
                 'end_date': end_date,
                 'total_dates': len(dates_to_process),
-                'successful_snapshots': 0,
-                'failed_snapshots': 0,
-                'skipped_snapshots': len(existing_snapshots) if not force_update else 0,
-                'details': []
+                'successful_snapshots': successful_snapshots,
+                'failed_snapshots': failed_snapshots,
+                'skipped_snapshots': skipped_snapshots
             }
 
-            # Process dates in batches for performance
-            batch_size = 50
-            for i in range(0, len(dates_to_process), batch_size):
-                batch_dates = dates_to_process[i:i + batch_size]
-
-                for target_date in batch_dates:
-                    snapshot_result = PortfolioHistoryService.save_daily_snapshot(
-                        portfolio, target_date, 'backfill'
-                    )
-
-                    if snapshot_result['success']:
-                        results['successful_snapshots'] += 1
-                    else:
-                        results['failed_snapshots'] += 1
-
-                    results['details'].append({
-                        'date': target_date,
-                        'success': snapshot_result['success'],
-                        'error': snapshot_result.get('error')
-                    })
-
-                # Small delay between batches to avoid overwhelming the database
-                if i + batch_size < len(dates_to_process):
-                    import time
-                    time.sleep(0.1)
-
-            logger.info(f"Backfill complete for {portfolio.name} ({start_date} to {end_date}): "
-                        f"{results['successful_snapshots']}/{results['total_dates']} successful")
-
-            return results
-
         except Exception as e:
-            logger.error(f"Error in backfill for {portfolio.name}: {str(e)}")
+            logger.error(f"Error backfilling portfolio history for {portfolio.name}: {str(e)}")
             return {
                 'success': False,
                 'error': str(e),
@@ -369,24 +350,20 @@ class PortfolioHistoryService:
             }
 
     @staticmethod
-    def get_portfolio_performance(portfolio: Portfolio, start_date: date,
-                                  end_date: date = None) -> Dict:
+    def get_portfolio_performance(portfolio: Portfolio, start_date: date, end_date: date) -> Dict:
         """
-        Get performance data for charts
+        Get portfolio performance data for charts and analysis
 
         Args:
             portfolio: Portfolio instance
-            start_date: Start date for performance data
-            end_date: End date for performance data (defaults to today)
+            start_date: Start date for analysis
+            end_date: End date for analysis
 
         Returns:
             Dict with performance data
         """
-        if end_date is None:
-            end_date = date.today()
-
         try:
-            # Get portfolio value history
+            # Get snapshots for the date range
             snapshots = PortfolioValueHistory.objects.filter(
                 portfolio=portfolio,
                 date__gte=start_date,
@@ -396,17 +373,17 @@ class PortfolioHistoryService:
             if not snapshots.exists():
                 return {
                     'success': False,
-                    'error': 'No historical data found for the specified period'
+                    'error': 'No historical data found for the specified date range'
                 }
 
-            # Prepare chart data
+            # Prepare chart data and calculate returns
             chart_data = []
             daily_returns = []
-
             previous_value = None
+
             for snapshot in snapshots:
                 chart_data.append({
-                    'date': snapshot.date,
+                    'date': snapshot.date.isoformat(),
                     'total_value': float(snapshot.total_value),
                     'total_cost': float(snapshot.total_cost),
                     'cash_balance': float(snapshot.cash_balance),
@@ -421,7 +398,7 @@ class PortfolioHistoryService:
                         (snapshot.total_value - previous_value) / previous_value * 100
                         if previous_value > 0 else 0
                     )
-                    daily_returns.append(daily_return)
+                    daily_returns.append(float(daily_return))  # Convert to float
 
                 previous_value = snapshot.total_value
 
@@ -438,6 +415,7 @@ class PortfolioHistoryService:
             # Calculate volatility (standard deviation of daily returns)
             volatility = 0
             if len(daily_returns) > 1:
+                # Convert all values to float to avoid Decimal/float mixing
                 avg_return = sum(daily_returns) / len(daily_returns)
                 variance = sum((r - avg_return) ** 2 for r in daily_returns) / len(daily_returns)
                 volatility = variance ** 0.5
@@ -537,23 +515,18 @@ class PortfolioHistoryService:
         """
         try:
             if start_date is None:
-                # Find earliest transaction date
-                earliest_transaction = Transaction.objects.filter(
+                # Start from first transaction or 30 days ago
+                oldest_transaction = Transaction.objects.filter(
                     portfolio=portfolio
                 ).order_by('transaction_date').first()
-                start_date = earliest_transaction.transaction_date.date() if earliest_transaction else date.today()
+
+                if oldest_transaction:
+                    start_date = oldest_transaction.transaction_date.date()
+                else:
+                    start_date = date.today() - timedelta(days=30)
 
             if end_date is None:
                 end_date = date.today()
-
-            # Get existing snapshots
-            existing_dates = set(
-                PortfolioValueHistory.objects.filter(
-                    portfolio=portfolio,
-                    date__gte=start_date,
-                    date__lte=end_date
-                ).values_list('date', flat=True)
-            )
 
             # Generate expected business days
             expected_dates = []
@@ -564,8 +537,21 @@ class PortfolioHistoryService:
                     expected_dates.append(current_date)
                 current_date += timedelta(days=1)
 
-            # Find missing dates
-            missing_dates = [d for d in expected_dates if d not in existing_dates]
+            # Get existing snapshots
+            existing_snapshots = PortfolioValueHistory.objects.filter(
+                portfolio=portfolio,
+                date__gte=start_date,
+                date__lte=end_date
+            ).values_list('date', flat=True)
+
+            existing_dates = set(existing_snapshots)
+            expected_dates_set = set(expected_dates)
+            missing_dates = sorted(expected_dates_set - existing_dates)
+
+            coverage_percentage = (
+                (len(existing_dates) / len(expected_dates) * 100)
+                if expected_dates else 100
+            )
 
             return {
                 'success': True,
@@ -576,11 +562,11 @@ class PortfolioHistoryService:
                 'total_existing': len(existing_dates),
                 'total_missing': len(missing_dates),
                 'missing_dates': missing_dates,
-                'coverage_percentage': (len(existing_dates) / len(expected_dates) * 100) if expected_dates else 100
+                'coverage_percentage': coverage_percentage
             }
 
         except Exception as e:
-            logger.error(f"Error finding gaps for {portfolio.name}: {str(e)}")
+            logger.error(f"Error detecting gaps for {portfolio.name}: {str(e)}")
             return {
                 'success': False,
                 'error': str(e),
@@ -588,72 +574,78 @@ class PortfolioHistoryService:
             }
 
     @staticmethod
-    def bulk_portfolio_processing(portfolios: List[Portfolio],
-                                  operation: str, **kwargs) -> Dict:
+    def bulk_portfolio_processing(portfolios: List[Portfolio], operation: str, **kwargs) -> Dict:
         """
         Process multiple portfolios in bulk
 
         Args:
             portfolios: List of Portfolio instances
-            operation: Operation to perform ('daily_snapshot', 'backfill', 'performance')
+            operation: Operation to perform ('daily_snapshot', 'backfill', 'gap_fill')
             **kwargs: Additional arguments for the operation
 
         Returns:
             Dict with bulk operation results
         """
         try:
-            results = {
-                'success': True,
-                'operation': operation,
-                'total_portfolios': len(portfolios),
-                'successful_operations': 0,
-                'failed_operations': 0,
-                'details': []
-            }
+            successful_operations = 0
+            failed_operations = 0
+            results = []
 
             for portfolio in portfolios:
                 try:
                     if operation == 'daily_snapshot':
+                        target_date = kwargs.get('target_date', date.today())
                         result = PortfolioHistoryService.save_daily_snapshot(
-                            portfolio, kwargs.get('target_date'), kwargs.get('calculation_source', 'bulk')
+                            portfolio, target_date, 'bulk_daily'
                         )
                     elif operation == 'backfill':
+                        start_date = kwargs.get('start_date')
+                        end_date = kwargs.get('end_date')
+                        force_update = kwargs.get('force_update', False)
                         result = PortfolioHistoryService.backfill_portfolio_history(
-                            portfolio, kwargs.get('start_date'), kwargs.get('end_date'),
-                            kwargs.get('force_update', False)
+                            portfolio, start_date, end_date, force_update
                         )
-                    elif operation == 'performance':
-                        result = PortfolioHistoryService.get_portfolio_performance(
-                            portfolio, kwargs.get('start_date'), kwargs.get('end_date')
-                        )
+                    elif operation == 'gap_fill':
+                        gaps_result = PortfolioHistoryService.get_portfolio_gaps(portfolio)
+                        if gaps_result['success'] and gaps_result['total_missing'] > 0:
+                            result = PortfolioHistoryService.backfill_portfolio_history(
+                                portfolio, gaps_result['start_date'], gaps_result['end_date'], True
+                            )
+                        else:
+                            result = {'success': True, 'message': 'No gaps found'}
                     else:
                         result = {'success': False, 'error': f'Unknown operation: {operation}'}
 
                     if result['success']:
-                        results['successful_operations'] += 1
+                        successful_operations += 1
                     else:
-                        results['failed_operations'] += 1
+                        failed_operations += 1
 
-                    results['details'].append({
+                    results.append({
                         'portfolio_id': portfolio.id,
                         'portfolio_name': portfolio.name,
                         'success': result['success'],
-                        'error': result.get('error')
+                        'error': result.get('error'),
+                        'details': result
                     })
 
                 except Exception as e:
-                    results['failed_operations'] += 1
-                    results['details'].append({
+                    failed_operations += 1
+                    results.append({
                         'portfolio_id': portfolio.id,
                         'portfolio_name': portfolio.name,
                         'success': False,
                         'error': str(e)
                     })
 
-            logger.info(f"Bulk {operation} complete: "
-                        f"{results['successful_operations']}/{results['total_portfolios']} successful")
-
-            return results
+            return {
+                'success': True,
+                'operation': operation,
+                'total_portfolios': len(portfolios),
+                'successful_operations': successful_operations,
+                'failed_operations': failed_operations,
+                'details': results
+            }
 
         except Exception as e:
             logger.error(f"Error in bulk portfolio processing: {str(e)}")
