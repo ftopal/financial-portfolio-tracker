@@ -166,6 +166,20 @@ export const portfolioAPI = {
     const params = forceRecalculate ? { force: 'true' } : {};
     return API.get(`portfolios/${portfolioId}/xirr/`, { params });
   },
+  // Portfolio Performance endpoints (Phase 5)
+  getPerformance: (id, params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return API.get(`portfolios/${id}/performance/${query ? `?${query}` : ''}`);
+  },
+
+  getPerformanceSummary: (id, params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return API.get(`portfolios/${id}/performance_summary/${query ? `?${query}` : ''}`);
+  },
+
+  recalculatePerformance: (id, data = {}) => {
+    return API.post(`portfolios/${id}/recalculate_performance/`, data);
+  },
 };
 
 // Cash Transaction services (NEW)

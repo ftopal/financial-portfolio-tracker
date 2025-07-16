@@ -45,6 +45,8 @@ import TransactionForm from '../components/TransactionForm';
 import PortfolioCurrencyView from '../components/PortfolioCurrencyView';
 import XIRRDisplay from '../components/XIRRDisplay';
 import { formatCurrency } from '../utils/currencyUtils';
+import PortfolioPerformanceChart from '../components/PortfolioPerformanceChart';
+import PortfolioPerformanceSummary from '../components/PortfolioPerformanceSummary';
 
 const ConsolidatedPortfolioDetails = () => {
   const { portfolioId } = useParams();
@@ -61,6 +63,7 @@ const ConsolidatedPortfolioDetails = () => {
   const [xirrData, setXirrData] = useState(null);
   const [xirrLoading, setXirrLoading] = useState(false);
   const [xirrError, setXirrError] = useState('');
+  const [showPerformanceChart, setShowPerformanceChart] = useState(true);
 
   const fetchConsolidatedData = useCallback(async () => {
     try {
@@ -297,6 +300,14 @@ const ConsolidatedPortfolioDetails = () => {
             size="medium"
             icon={<AttachMoneyIcon />}
           />
+          <Tooltip title="Toggle Performance Charts">
+            <IconButton
+              onClick={() => setShowPerformanceChart(!showPerformanceChart)}
+              color={showPerformanceChart ? 'primary' : 'default'}
+            >
+              <ShowChartIcon />
+            </IconButton>
+          </Tooltip>
         </Box>
         {portfolio?.description && (
           <Typography variant="body1" color="text.secondary">
@@ -418,33 +429,33 @@ const ConsolidatedPortfolioDetails = () => {
                   </CardContent>
                 </Card>
               </Grid>
+
+              {xirrData?.portfolio_xirr !== undefined && (
+                <Grid item xs={12} sm={6} md={3}>
+                  <Card>
+                    <CardContent>
+                      <Box display="flex" justifyContent="space-between" alignItems="flex-start">
+                        <Box>
+                          <Typography color="text.secondary" gutterBottom variant="body2">
+                            Portfolio XIRR
+                          </Typography>
+                          <XIRRDisplay
+                            value={xirrData.portfolio_xirr}
+                            loading={xirrLoading}
+                            error={xirrError}
+                            variant="h5"
+                            showTooltip={true}
+                          />
+                        </Box>
+                        <ShowChartIcon color={xirrData.portfolio_xirr >= 0 ? 'success' : 'error'} />
+                      </Box>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              )}
             </Grid>
           )}
         </Grid>
-
-        {xirrData?.portfolio_xirr !== undefined && (
-          <Grid item xs={12} sm={6} md={3}>
-            <Card>
-              <CardContent>
-                <Box display="flex" justifyContent="space-between" alignItems="flex-start">
-                  <Box>
-                    <Typography color="text.secondary" gutterBottom variant="body2">
-                      Portfolio XIRR
-                    </Typography>
-                    <XIRRDisplay
-                      value={xirrData.portfolio_xirr}
-                      loading={xirrLoading}
-                      error={xirrError}
-                      variant="h5"
-                      showTooltip={true}
-                    />
-                  </Box>
-                  <ShowChartIcon color={xirrData.portfolio_xirr >= 0 ? 'success' : 'error'} />
-                </Box>
-              </CardContent>
-            </Card>
-          </Grid>
-        )}
 
         {/* Currency View */}
         <Grid item xs={12} lg={6}>
@@ -453,6 +464,42 @@ const ConsolidatedPortfolioDetails = () => {
           )}
         </Grid>
       </Grid>
+
+      {/* Portfolio Performance Charts Section */}
+      {portfolio && showPerformanceChart && (
+        <Grid container spacing={3} sx={{ mb: 4 }}>
+          {/* Performance Chart */}
+          <Grid item xs={12}>
+            <PortfolioPerformanceChart
+              portfolioId={portfolioId}
+              portfolioName={portfolio.name}
+              currency={portfolio.base_currency || 'USD'}
+            />
+          </Grid>
+
+          {/* Performance Summary for Dashboard */}
+          <Grid item xs={12} md={6}>
+            <PortfolioPerformanceSummary
+              portfolioId={portfolioId}
+              period="1Y"
+              currency={portfolio.base_currency || 'USD'}
+              showTitle={true}
+              compact={false}
+            />
+          </Grid>
+
+          {/* Additional Performance Summary for Quick View */}
+          <Grid item xs={12} md={6}>
+            <PortfolioPerformanceSummary
+              portfolioId={portfolioId}
+              period="3M"
+              currency={portfolio.base_currency || 'USD'}
+              showTitle={true}
+              compact={false}
+            />
+          </Grid>
+        </Grid>
+      )}
 
       {/* Cash Management */}
       {cashAccount && (

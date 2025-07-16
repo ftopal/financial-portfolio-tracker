@@ -1064,7 +1064,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         if hasattr(user, 'subscription') and getattr(user.subscription, 'is_premium', False):
             return None  # Unlimited access for premium users
         else:
-            return 365  # 1 year retention for free users
+            return None  # 1 year retention for free users
 
     def _format_chart_data(self, chart_data: List[Dict]) -> Dict:
         """Format performance data for frontend chart consumption"""
