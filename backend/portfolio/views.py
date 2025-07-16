@@ -1,9 +1,14 @@
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, date
 from decimal import Decimal
+
+from typing import Dict, List, Optional
 
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import Coalesce
 from django.utils import timezone
+from django.contrib.auth.models import User
+from django.shortcuts import get_object_or_404
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, action
 from rest_framework.permissions import IsAuthenticated
@@ -13,7 +18,7 @@ from portfolio_project import settings
 from .models import (
     Portfolio, AssetCategory, Security, Transaction,
     PriceHistory, CashTransaction, UserPreferences,
-    Currency, ExchangeRate
+    Currency, ExchangeRate, PortfolioValueHistory
 )
 from .serializers import (
     PortfolioSerializer, PortfolioDetailSerializer,
@@ -23,6 +28,7 @@ from .serializers import (
 )
 from .services.security_import_service import SecurityImportService
 from .services.currency_service import CurrencyService
+from .services.portfolio_history_service import PortfolioHistoryService
 import logging
 import math
 
@@ -172,7 +178,13 @@ class PortfolioViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def holdings(self, request, pk=None):
         """Get portfolio holdings with details"""
-        portfolio = self.get_object()
+        try:
+            portfolio = self.get_object()
+        except Portfolio.DoesNotExist:
+            return Response(
+                {'error': 'Portfolio not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
         holdings = portfolio.get_holdings()
 
         holdings_data = []
@@ -794,6 +806,285 @@ class PortfolioViewSet(viewsets.ModelViewSet):
                 },
                 status=500
             )
+
+    @action(detail=True, methods=['get'])
+    def performance(self, request, pk=None):
+        """
+        Get portfolio performance data for charts
+
+        Query Parameters:
+        - period: 1M, 3M, 6M, 1Y, YTD, ALL (default: 1Y)
+        - start_date: YYYY-MM-DD format (overrides period)
+        - end_date: YYYY-MM-DD format (defaults to today)
+        """
+        try:
+            portfolio = self.get_object()
+
+            # Check user permissions
+            if portfolio.user != request.user:
+                return Response(
+                    {'error': 'Permission denied'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            # Parse query parameters
+            period = request.query_params.get('period', '1Y')
+            start_date_str = request.query_params.get('start_date')
+            end_date_str = request.query_params.get('end_date')
+
+            # Calculate date range
+            end_date = date.today()
+            if end_date_str:
+                try:
+                    end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+                except ValueError:
+                    return Response(
+                        {'error': 'Invalid end_date format. Use YYYY-MM-DD'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # Calculate start date based on period or explicit start_date
+            start_date = None
+            if start_date_str:
+                try:
+                    start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                except ValueError:
+                    return Response(
+                        {'error': 'Invalid start_date format. Use YYYY-MM-DD'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                start_date = self._calculate_period_start_date(period, end_date)
+
+            # Apply retention policy for free users
+            retention_limit = self._get_user_retention_limit(request.user)
+            if retention_limit:
+                earliest_allowed = end_date - timedelta(days=retention_limit)
+                if start_date < earliest_allowed:
+                    start_date = earliest_allowed
+
+            # Get performance data from service
+            performance_data = PortfolioHistoryService.get_portfolio_performance(
+                portfolio, start_date, end_date
+            )
+
+            if not performance_data['success']:
+                return Response(
+                    {'error': performance_data.get('error', 'Failed to calculate performance')},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            # Format response for frontend (using correct keys from service)
+            chart_data = self._format_chart_data(performance_data['chart_data'])
+
+            return Response({
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'period': period,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'chart_data': chart_data,
+                'summary': performance_data['performance_summary'],  # FIXED: use correct key
+                'retention_applied': retention_limit is not None
+            })
+
+        except Exception as e:
+            logger.error(f"Error in portfolio performance endpoint: {str(e)}")
+            return Response(
+                {'error': 'Internal server error'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get'])
+    def performance_summary(self, request, pk=None):
+        """
+        Get portfolio performance summary statistics
+
+        Query Parameters:
+        - period: 1M, 3M, 6M, 1Y, YTD, ALL (default: 1Y)
+        """
+        try:
+            portfolio = self.get_object()
+
+            # Check user permissions
+            if portfolio.user != request.user:
+                return Response(
+                    {'error': 'Permission denied'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            period = request.query_params.get('period', '1Y')
+            end_date = date.today()
+            start_date = self._calculate_period_start_date(period, end_date)
+
+            # Apply retention policy
+            retention_limit = self._get_user_retention_limit(request.user)
+            if retention_limit:
+                earliest_allowed = end_date - timedelta(days=retention_limit)
+                if start_date < earliest_allowed:
+                    start_date = earliest_allowed
+
+            # Get performance data
+            performance_data = PortfolioHistoryService.get_portfolio_performance(
+                portfolio, start_date, end_date
+            )
+
+            if not performance_data['success']:
+                return Response(
+                    {'error': performance_data.get('error', 'Failed to calculate performance')},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            # Return only summary data (using correct key)
+            return Response({
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'period': period,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'summary': performance_data['performance_summary'],  # FIXED: use correct key
+                'retention_applied': retention_limit is not None
+            })
+
+        except Exception as e:
+            logger.error(f"Error in portfolio performance summary endpoint: {str(e)}")
+            return Response(
+                {'error': 'Internal server error'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['post'])
+    def recalculate_performance(self, request, pk=None):
+        """
+        Manually trigger portfolio performance recalculation
+
+        Body Parameters:
+        - days: Number of days to recalculate (default: 30)
+        - force: Force recalculation even if data exists (default: false)
+        """
+        try:
+            portfolio = self.get_object()
+
+            # Check user permissions
+            if portfolio.user != request.user:
+                return Response(
+                    {'error': 'Permission denied'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            days = request.data.get('days', 30)
+            force = request.data.get('force', False)
+
+            # Validate days parameter
+            try:
+                days = int(days)
+                if days < 1 or days > 365:
+                    return Response(
+                        {'error': 'Days must be between 1 and 365'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid days parameter'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Calculate date range
+            end_date = date.today()
+            start_date = end_date - timedelta(days=days)
+
+            # Trigger recalculation
+            result = PortfolioHistoryService.backfill_portfolio_history(
+                portfolio, start_date, end_date, force_update=force
+            )
+
+            if not result['success']:
+                return Response(
+                    {'error': result.get('error', 'Recalculation failed')},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            return Response({
+                'success': True,
+                'message': f'Portfolio performance recalculated for {days} days',
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'snapshots_created': result.get('snapshots_created', 0),
+                'snapshots_updated': result.get('snapshots_updated', 0),
+                'successful_snapshots': result.get('successful_snapshots', 0),  # ADDED
+                'failed_snapshots': result.get('failed_snapshots', 0),  # ADDED
+                'skipped_snapshots': result.get('skipped_snapshots', 0)  # ADDED
+            })
+
+        except Exception as e:
+            logger.error(f"Error in portfolio recalculation endpoint: {str(e)}")
+            return Response(
+                {'error': 'Internal server error'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _calculate_period_start_date(self, period: str, end_date: date) -> date:
+        """Calculate start date based on period"""
+        if period == '1M':
+            return end_date - timedelta(days=30)
+        elif period == '3M':
+            return end_date - timedelta(days=90)
+        elif period == '6M':
+            return end_date - timedelta(days=180)
+        elif period == '1Y':
+            return end_date - timedelta(days=365)
+        elif period == 'YTD':
+            return date(end_date.year, 1, 1)
+        elif period == 'ALL':
+            # Find earliest transaction date
+            earliest_transaction = Transaction.objects.filter(
+                portfolio__user=self.request.user
+            ).order_by('transaction_date').first()
+
+            if earliest_transaction:
+                return earliest_transaction.transaction_date.date()
+            else:
+                return end_date - timedelta(days=365)  # Default to 1 year
+        else:
+            # Default to 1 year
+            return end_date - timedelta(days=365)
+
+    def _get_user_retention_limit(self, user) -> Optional[int]:
+        """
+        Get data retention limit for user based on their subscription
+        Returns None for unlimited access, or number of days for limited access
+        """
+        # Check if user has premium subscription
+        # This is a placeholder - implement based on your user model/subscription system
+
+        # For now, assume all users are free tier with 1 year retention
+        # TODO: Implement proper subscription checking
+        if hasattr(user, 'subscription') and getattr(user.subscription, 'is_premium', False):
+            return None  # Unlimited access for premium users
+        else:
+            return 365  # 1 year retention for free users
+
+    def _format_chart_data(self, chart_data: List[Dict]) -> Dict:
+        """Format performance data for frontend chart consumption"""
+        # chart_data is already a list of dictionaries with the correct structure
+        # Convert to format expected by ApexCharts
+        formatted_data = []
+        for point in chart_data:
+            formatted_data.append({
+                'x': point['date'],  # ApexCharts expects 'x' for time series
+                'y': point['total_value']  # Use total_value as the main chart value
+            })
+
+        return {
+            'series': [{
+                'name': 'Portfolio Value',
+                'data': formatted_data
+            }],
+            'categories': [point['date'] for point in chart_data],
+            'raw_data': chart_data  # Include raw data for additional chart types
+        }
 
 
 class SecurityViewSet(viewsets.ModelViewSet):

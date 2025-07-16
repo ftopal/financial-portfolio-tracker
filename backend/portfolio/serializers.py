@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import (
-    Portfolio, AssetCategory, Security, Transaction,
+    Portfolio, AssetCategory, Security, Transaction, PortfolioValueHistory,
     PriceHistory, RealEstateAsset, User, PortfolioCashAccount, CashTransaction, UserPreferences
 )
 from decimal import Decimal
@@ -633,3 +633,36 @@ class UserPreferencesSerializer(serializers.ModelSerializer):
         instance.default_currency = validated_data.get('default_currency', instance.default_currency)
         instance.save()
         return instance
+
+
+class PortfolioPerformanceSerializer(serializers.Serializer):
+    """Serializer for portfolio performance data"""
+    portfolio_id = serializers.IntegerField()
+    portfolio_name = serializers.CharField()
+    period = serializers.CharField()
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    chart_data = serializers.DictField()
+    summary = serializers.DictField()
+    retention_applied = serializers.BooleanField()
+
+
+class PortfolioValueHistorySerializer(serializers.ModelSerializer):
+    """Serializer for portfolio value history records"""
+    portfolio_name = serializers.CharField(source='portfolio.name', read_only=True)
+
+    class Meta:
+        model = PortfolioValueHistory
+        fields = [
+            'id', 'portfolio', 'portfolio_name', 'date', 'total_value',
+            'cash_balance', 'securities_value', 'total_cost_basis',
+            'unrealized_gain_loss', 'realized_gain_loss', 'total_return',
+            'daily_return', 'calculation_source', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class RecalculatePerformanceSerializer(serializers.Serializer):
+    """Serializer for performance recalculation requests"""
+    days = serializers.IntegerField(min_value=1, max_value=365, default=30)
+    force = serializers.BooleanField(default=False)
