@@ -122,7 +122,7 @@ const PortfolioPerformanceSummary = ({
           </Box>
 
           <Typography variant="body2" color="text.secondary">
-            {formatCurrency(summary.total_return || 0, currency)}
+            {formatCurrency(summary.unrealized_gains || 0, currency)}
           </Typography>
         </CardContent>
       </Card>
@@ -163,7 +163,7 @@ const PortfolioPerformanceSummary = ({
                 </Typography>
               </Box>
               <Typography variant="body2" color="text.secondary">
-                {formatCurrency(summary.total_return || 0, currency)}
+                {formatCurrency(summary.unrealized_gains || 0, currency)}
               </Typography>
             </Box>
           </Grid>
@@ -175,10 +175,10 @@ const PortfolioPerformanceSummary = ({
                 Current Value
               </Typography>
               <Typography variant="h5" gutterBottom>
-                {formatCurrency(summary.current_value || 0, currency)}
+                {formatCurrency(summary.end_value || 0, currency)}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Initial: {formatCurrency(summary.initial_value || 0, currency)}
+                Initial: {formatCurrency(summary.start_value || 0, currency)}
               </Typography>
             </Box>
           </Grid>

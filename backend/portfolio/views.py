@@ -212,61 +212,201 @@ class PortfolioViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def performance(self, request, pk=None):
-        """Get portfolio performance over time"""
-        portfolio = self.get_object()
-        days = int(request.query_params.get('days', 30))
+        """
+        Get portfolio performance data with chart data
+        Fixed version to handle all calculation issues
+        """
+        portfolio = get_object_or_404(Portfolio, pk=pk)
 
-        end_date = timezone.now()
-        start_date = end_date - timedelta(days=days)
+        # Get query parameters
+        period = request.query_params.get('period', '1Y')
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
 
-        # Get all transactions up to end date
-        transactions = portfolio.transactions.filter(
-            transaction_date__lte=end_date
-        ).select_related('security')
+        try:
+            # Calculate date range
+            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date else date.today()
 
-        # Calculate daily values
-        performance_data = []
-        current_date = start_date
+            if start_date:
+                start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+            else:
+                start_date_obj = self.get_period_start_date(period, end_date_obj)
 
-        while current_date <= end_date:
-            daily_value = Decimal('0')
+            # Get portfolio performance data
+            performance_data = self.get_portfolio_performance_data(
+                portfolio, start_date_obj, end_date_obj
+            )
 
-            # Get holdings as of current_date
-            for security in transactions.values('security').distinct():
-                security_transactions = transactions.filter(
-                    security=security['security'],
-                    transaction_date__lte=current_date
+            # Apply retention policy
+            retention_applied = self.apply_retention_policy(
+                request.user, start_date_obj, end_date_obj
+            )
+
+            if retention_applied:
+                performance_data['retention_applied'] = True
+                performance_data['retention_message'] = (
+                    f"Historical data limited to {self.get_user_retention_days(request.user)} days. "
+                    "Upgrade to Premium for unlimited access."
                 )
 
-                # Calculate quantity held
-                quantity = security_transactions.filter(
-                    transaction_type='BUY'
-                ).aggregate(
-                    total=Coalesce(Sum('quantity'), Decimal('0'))
-                )['total'] - security_transactions.filter(
-                    transaction_type='SELL'
-                ).aggregate(
-                    total=Coalesce(Sum('quantity'), Decimal('0'))
-                )['total']
+            return Response(performance_data)
 
-                if quantity > 0:
-                    # Get price for this date
-                    price_history = PriceHistory.objects.filter(
-                        security_id=security['security'],
-                        date__date=current_date.date()
-                    ).first()
+        except ValueError as e:
+            return Response(
+                {'error': f'Invalid date format: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"Error getting portfolio performance: {str(e)}")
+            return Response(
+                {'error': 'Failed to retrieve portfolio performance'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
-                    if price_history:
-                        daily_value += quantity * price_history.close_price
+    def get_portfolio_performance_data(self, portfolio, start_date, end_date):
+        """
+        Get comprehensive portfolio performance data
+        """
+        from portfolio.services.portfolio_history_service import PortfolioHistoryService
 
-            performance_data.append({
-                'date': current_date.date(),
-                'value': float(daily_value)
+        # Ensure we have portfolio value history
+        self.ensure_portfolio_history(portfolio, start_date, end_date)
+
+        # Get performance data from service
+        performance_result = PortfolioHistoryService.get_portfolio_performance(
+            portfolio, start_date, end_date
+        )
+
+        if not performance_result['success']:
+            raise Exception(f"Failed to get performance data: {performance_result.get('error')}")
+
+        # Get current portfolio value
+        current_value_result = PortfolioHistoryService.calculate_portfolio_value_on_date(
+            portfolio, date.today()
+        )
+
+        current_value = current_value_result['total_value'] if current_value_result['success'] else Decimal('0')
+
+        # Format chart data for ApexCharts
+        chart_data = []
+        categories = []
+
+        for data_point in performance_result['chart_data']:
+            chart_data.append({
+                'x': data_point['date'].strftime('%Y-%m-%d'),
+                'y': float(data_point['value'])
             })
+            categories.append(data_point['date'].strftime('%Y-%m-%d'))
 
+        return {
+            'success': True,
+            'portfolio_id': portfolio.id,
+            'portfolio_name': portfolio.name,
+            'period': {
+                'start_date': start_date.strftime('%Y-%m-%d'),
+                'end_date': end_date.strftime('%Y-%m-%d'),
+                'total_days': (end_date - start_date).days
+            },
+            'current_value': float(current_value),
+            'performance_metrics': {
+                'total_return': float(performance_result['total_return']),
+                'total_return_percentage': float(performance_result['total_return_percentage']),
+                'volatility': float(performance_result['volatility']),
+                'best_day': float(performance_result['best_day']),
+                'worst_day': float(performance_result['worst_day']),
+                'positive_days': performance_result['positive_days'],
+                'negative_days': performance_result['negative_days'],
+                'total_days': performance_result['total_days']
+            },
+            'chart_data': {
+                'series': [{
+                    'name': 'Portfolio Value',
+                    'data': chart_data
+                }],
+                'categories': categories
+            },
+            'data_points': len(chart_data),
+            'retention_applied': False
+        }
+
+    def ensure_portfolio_history(self, portfolio, start_date, end_date):
+        """
+        Ensure portfolio has complete value history for the requested period
+        """
+        from portfolio.services.portfolio_history_service import PortfolioHistoryService
+        from portfolio.models import PortfolioValueHistory
+
+        # Check if we have complete data
+        existing_count = PortfolioValueHistory.objects.filter(
+            portfolio=portfolio,
+            date__gte=start_date,
+            date__lte=end_date
+        ).count()
+
+        # Calculate expected business days
+        expected_days = 0
+        current_date = start_date
+        while current_date <= end_date:
+            if current_date.weekday() < 5:  # Monday = 0, Friday = 4
+                expected_days += 1
             current_date += timedelta(days=1)
 
-        return Response(performance_data)
+        # If we're missing more than 10% of expected data, trigger backfill
+        if existing_count < (expected_days * 0.9):
+            logger.info(f"Backfilling portfolio history for {portfolio.name}")
+
+            # Backfill missing data
+            result = PortfolioHistoryService.backfill_portfolio_history(
+                portfolio, start_date, end_date, force_update=False
+            )
+
+            if not result['success']:
+                logger.error(f"Failed to backfill portfolio history: {result.get('error')}")
+
+    def get_period_start_date(self, period, end_date):
+        """
+        Calculate start date based on period
+        """
+        if period == '1M':
+            return end_date - timedelta(days=30)
+        elif period == '3M':
+            return end_date - timedelta(days=90)
+        elif period == '6M':
+            return end_date - timedelta(days=180)
+        elif period == '1Y':
+            return end_date - timedelta(days=365)
+        elif period == 'YTD':
+            return date(end_date.year, 1, 1)
+        elif period == 'ALL':
+            # Find the earliest transaction date
+            earliest_transaction = portfolio.transactions.order_by('date').first()
+            if earliest_transaction:
+                return earliest_transaction.date
+            else:
+                return end_date - timedelta(days=365)
+        else:
+            return end_date - timedelta(days=365)
+
+    def apply_retention_policy(self, user, start_date, end_date):
+        """
+        Apply user retention policy
+        """
+        retention_days = self.get_user_retention_days(user)
+
+        if retention_days is None:
+            return False  # No retention limit
+
+        cutoff_date = date.today() - timedelta(days=retention_days)
+
+        return start_date < cutoff_date
+
+    def get_user_retention_days(self, user):
+        """
+        Get user's data retention limit in days
+        """
+        # TODO: Implement user tier checking
+        # For now, return 365 days for free users
+        return 365
 
     @action(detail=True, methods=['post'])
     def deposit_cash(self, request, pk=None):
@@ -956,38 +1096,23 @@ class PortfolioViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def recalculate_performance(self, request, pk=None):
         """
-        Manually trigger portfolio performance recalculation
-
-        Body Parameters:
-        - days: Number of days to recalculate (default: 30)
-        - force: Force recalculation even if data exists (default: false)
+        Manually recalculate portfolio performance
         """
+        portfolio = get_object_or_404(Portfolio, pk=pk)
+
+        # Get parameters
+        days = int(request.data.get('days', 30))
+        force_update = request.data.get('force_update', False)
+
+        # Validate days parameter
+        if days < 1 or days > 365:
+            return Response(
+                {'error': 'Days must be between 1 and 365'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         try:
-            portfolio = self.get_object()
-
-            # Check user permissions
-            if portfolio.user != request.user:
-                return Response(
-                    {'error': 'Permission denied'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-            days = request.data.get('days', 30)
-            force = request.data.get('force', False)
-
-            # Validate days parameter
-            try:
-                days = int(days)
-                if days < 1 or days > 365:
-                    return Response(
-                        {'error': 'Days must be between 1 and 365'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-            except (ValueError, TypeError):
-                return Response(
-                    {'error': 'Invalid days parameter'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            from portfolio.services.portfolio_history_service import PortfolioHistoryService
 
             # Calculate date range
             end_date = date.today()
@@ -995,33 +1120,25 @@ class PortfolioViewSet(viewsets.ModelViewSet):
 
             # Trigger recalculation
             result = PortfolioHistoryService.backfill_portfolio_history(
-                portfolio, start_date, end_date, force_update=force
+                portfolio, start_date, end_date, force_update=force_update
             )
 
-            if not result['success']:
+            if result['success']:
+                return Response({
+                    'success': True,
+                    'message': f'Successfully recalculated {result["successful_snapshots"]} snapshots',
+                    'details': result
+                })
+            else:
                 return Response(
-                    {'error': result.get('error', 'Recalculation failed')},
+                    {'error': f'Recalculation failed: {result.get("error")}'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
-            return Response({
-                'success': True,
-                'message': f'Portfolio performance recalculated for {days} days',
-                'portfolio_id': portfolio.id,
-                'portfolio_name': portfolio.name,
-                'start_date': start_date.isoformat(),
-                'end_date': end_date.isoformat(),
-                'snapshots_created': result.get('snapshots_created', 0),
-                'snapshots_updated': result.get('snapshots_updated', 0),
-                'successful_snapshots': result.get('successful_snapshots', 0),  # ADDED
-                'failed_snapshots': result.get('failed_snapshots', 0),  # ADDED
-                'skipped_snapshots': result.get('skipped_snapshots', 0)  # ADDED
-            })
-
         except Exception as e:
-            logger.error(f"Error in portfolio recalculation endpoint: {str(e)}")
+            logger.error(f"Error recalculating portfolio performance: {str(e)}")
             return Response(
-                {'error': 'Internal server error'},
+                {'error': 'Failed to recalculate portfolio performance'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

@@ -56,14 +56,14 @@ class Command(BaseCommand):
         self.stdout.write("\n📊 TRANSACTION ANALYSIS")
         self.stdout.write("=" * 50)
 
-        transactions = portfolio.transactions.all().order_by('date')
+        transactions = portfolio.transactions.all().order_by('transaction_date')
 
         for transaction in transactions:
             self.stdout.write(
-                f"📅 {transaction.date} | {transaction.type.upper()} | "
+                f"📅 {transaction.transaction_date} | {transaction.transaction_type.upper()} | "
                 f"{transaction.security.symbol if transaction.security else 'CASH'} | "
                 f"Qty: {transaction.quantity} | Price: {transaction.price} | "
-                f"Amount: {transaction.amount}"
+                f"Amount: {transaction.base_amount}"
             )
 
         # Calculate expected balances
@@ -71,16 +71,16 @@ class Command(BaseCommand):
         holdings = {}
 
         for transaction in transactions:
-            if transaction.type == 'deposit':
-                cash_balance += transaction.amount
-            elif transaction.type == 'withdrawal':
-                cash_balance -= transaction.amount
-            elif transaction.type == 'buy':
+            if transaction.transaction_type == 'deposit':
+                cash_balance += transaction.base_amount
+            elif transaction.transaction_type == 'withdrawal':
+                cash_balance -= transaction.base_amount
+            elif transaction.transaction_type == 'buy':
                 cash_balance -= (transaction.quantity * transaction.price)
                 if transaction.security.symbol not in holdings:
                     holdings[transaction.security.symbol] = Decimal('0')
                 holdings[transaction.security.symbol] += transaction.quantity
-            elif transaction.type == 'sell':
+            elif transaction.transaction_type == 'sell':
                 cash_balance += (transaction.quantity * transaction.price)
                 if transaction.security.symbol in holdings:
                     holdings[transaction.security.symbol] -= transaction.quantity
@@ -107,7 +107,7 @@ class Command(BaseCommand):
 
             if latest_price:
                 self.stdout.write(
-                    f"📊 {security.symbol} | Latest: {latest_price.close} | "
+                    f"📊 {security.symbol} | Latest: {latest_price.close_price} | "
                     f"Date: {latest_price.date}"
                 )
             else:
@@ -130,16 +130,16 @@ class Command(BaseCommand):
             self.stdout.write(f"\n📅 Testing date: {test_date}")
 
             # Manual calculation
-            cash_balance = portfolio.get_cash_balance_on_date(test_date)
+            cash_balance = self.calculate_cash_balance_on_date(portfolio, test_date)
 
             # Get holdings on this date
             transactions = portfolio.transactions.filter(
-                date__lte=test_date
-            ).order_by('date')
+                transaction_date__lte=test_date
+            ).order_by('transaction_date')
 
             holdings = {}
             for transaction in transactions:
-                if transaction.type == 'buy' and transaction.security:
+                if transaction.transaction_type == 'buy' and transaction.security:
                     if transaction.security.symbol not in holdings:
                         holdings[transaction.security.symbol] = Decimal('0')
                     holdings[transaction.security.symbol] += transaction.quantity
@@ -190,6 +190,26 @@ class Command(BaseCommand):
                 self.stdout.write(
                     self.style.ERROR(f"❌ Service calculation failed: {service_result.get('error')}")
                 )
+
+    def calculate_cash_balance_on_date(self, portfolio, target_date):
+        """Calculate cash balance manually for comparison"""
+        transactions = portfolio.transactions.filter(
+            transaction_date__lte=target_date
+        ).order_by('transaction_date')
+
+        cash_balance = Decimal('0')
+
+        for transaction in transactions:
+            if transaction.transaction_type == 'deposit':
+                cash_balance += transaction.base_amount
+            elif transaction.transaction_type == 'withdrawal':
+                cash_balance -= transaction.base_amount
+            elif transaction.transaction_type == 'buy':
+                cash_balance -= (transaction.quantity * transaction.price)
+            elif transaction.transaction_type == 'sell':
+                cash_balance += (transaction.quantity * transaction.price)
+
+        return cash_balance
 
     def check_value_history(self, portfolio):
         self.stdout.write("\n📊 VALUE HISTORY ANALYSIS")

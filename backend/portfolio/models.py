@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator
 from decimal import Decimal
+from datetime import date, datetime
 from django.utils import timezone
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
@@ -286,6 +287,58 @@ class Portfolio(models.Model):
             'total_return_pct': ((total_gains + total_dividends) / total_cost * 100) if total_cost > 0 else 0,
             'holdings_count': len(holdings)
         }
+
+    def get_cash_balance_on_date(self, target_date: date) -> Decimal:
+        """
+        Calculate cash balance as of a specific date
+
+        Args:
+            target_date: Date to calculate balance for
+
+        Returns:
+            Decimal cash balance
+        """
+        from decimal import Decimal
+
+        # Get all transactions up to target date
+        transactions = self.transactions.filter(
+            transaction_date__lte=target_date
+        ).order_by('transaction_date')
+
+        # Start with initial cash balance from cash account
+        cash_balance = Decimal('0')
+
+        # Get cash transactions from the cash account
+        if hasattr(self, 'cash_account') and self.cash_account:
+            cash_transactions = self.cash_account.transactions.filter(
+                transaction_date__lte=target_date
+            ).order_by('transaction_date')
+
+            for cash_tx in cash_transactions:
+                cash_balance += cash_tx.amount
+
+        # Adjust for security transactions (buy/sell affects cash)
+        for transaction in transactions:
+            if transaction.transaction_type == 'BUY':
+                # Subtract the total cost of purchase (including fees)
+                cash_balance -= (transaction.quantity * transaction.price + transaction.fees)
+            elif transaction.transaction_type == 'SELL':
+                # Add the total proceeds from sale (minus fees)
+                cash_balance += (transaction.quantity * transaction.price - transaction.fees)
+            elif transaction.transaction_type == 'DIVIDEND':
+                # Add dividend payments
+                if transaction.dividend_per_share:
+                    cash_balance += (transaction.quantity * transaction.dividend_per_share)
+                elif transaction.price:
+                    cash_balance += transaction.price
+            elif transaction.transaction_type == 'FEE':
+                # Subtract fees
+                cash_balance -= transaction.fees
+            elif transaction.transaction_type == 'INTEREST':
+                # Add interest
+                cash_balance += transaction.quantity
+
+        return cash_balance
 
 
 class AssetCategory(models.Model):

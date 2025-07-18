@@ -40,7 +40,7 @@ class PortfolioHistoryService:
     @staticmethod
     def calculate_portfolio_value_on_date(portfolio: Portfolio, target_date: date) -> Dict:
         """
-        Calculate portfolio value for a specific date
+        Calculate portfolio value for a specific date - COMPLETE VERSION
 
         Args:
             portfolio: Portfolio instance
@@ -50,24 +50,41 @@ class PortfolioHistoryService:
             Dict containing portfolio value data
         """
         try:
+            from datetime import datetime
+            from django.utils import timezone
+
+            # Convert date to datetime with timezone for proper comparison
+            if isinstance(target_date, date):
+                target_datetime = timezone.make_aware(datetime.combine(target_date, datetime.min.time()))
+            else:
+                target_datetime = target_date
+
             # Get all transactions up to and including the target date
             transactions = Transaction.objects.filter(
                 portfolio=portfolio,
-                transaction_date__date__lte=target_date
+                transaction_date__lte=target_datetime
             ).order_by('transaction_date')
 
             # Calculate holdings as of target date
             holdings = {}
             cash_balance = Decimal('0')
 
-            # Get initial cash balance if cash account exists
+            # Get cash balance from cash account (up to target date)
             try:
                 cash_account = PortfolioCashAccount.objects.get(portfolio=portfolio)
-                cash_balance = cash_account.balance
+                # Get cash transactions up to target date
+                cash_transactions = cash_account.transactions.filter(
+                    transaction_date__lte=target_datetime
+                ).order_by('transaction_date')
+
+                for cash_tx in cash_transactions:
+                    cash_balance += cash_tx.amount
+
             except PortfolioCashAccount.DoesNotExist:
                 # Portfolio doesn't have cash account, start with zero
                 cash_balance = Decimal('0')
 
+            # Process security transactions
             for transaction in transactions:
                 if transaction.transaction_type in ['BUY', 'SELL']:
                     security = transaction.security
@@ -80,54 +97,51 @@ class PortfolioHistoryService:
 
                     if transaction.transaction_type == 'BUY':
                         holdings[security.id]['quantity'] += transaction.quantity
-                        holdings[security.id]['total_cost'] += (
-                                transaction.quantity * transaction.price
-                        )
-                        cash_balance -= (transaction.quantity * transaction.price)
-                    else:  # SELL
-                        # Calculate average cost for sold shares
-                        if holdings[security.id]['quantity'] > 0:
-                            avg_cost = (holdings[security.id]['total_cost'] /
-                                        holdings[security.id]['quantity'])
-                            cost_reduction = avg_cost * transaction.quantity
-                            holdings[security.id]['total_cost'] -= cost_reduction
+                        holdings[security.id]['total_cost'] += (transaction.quantity * transaction.price)
 
+                    elif transaction.transaction_type == 'SELL':
                         holdings[security.id]['quantity'] -= transaction.quantity
-                        cash_balance += (transaction.quantity * transaction.price)
-
-                        # Remove zero or negative positions
+                        # Proportionally reduce total cost
                         if holdings[security.id]['quantity'] <= 0:
-                            del holdings[security.id]
-
-                elif transaction.transaction_type == 'DIVIDEND':
-                    cash_balance += transaction.quantity * transaction.price
-                elif transaction.transaction_type in ['DEPOSIT', 'WITHDRAWAL']:
-                    cash_balance += transaction.quantity * transaction.price
+                            holdings[security.id]['total_cost'] = Decimal('0')
+                        else:
+                            cost_per_share = holdings[security.id]['total_cost'] / (
+                                        holdings[security.id]['quantity'] + transaction.quantity)
+                            holdings[security.id]['total_cost'] -= (cost_per_share * transaction.quantity)
 
             # Calculate current value of holdings
-            total_value = cash_balance
-            total_cost = Decimal('0')
+            holdings_value = Decimal('0')
             holdings_count = 0
+            holdings_list = []
+            total_cost = Decimal('0')
 
-            for holding_data in holdings.values():
-                security = holding_data['security']
-                quantity = holding_data['quantity']
-                cost = holding_data['total_cost']
+            for security_id, holding in holdings.items():
+                if holding['quantity'] > 0:
+                    holdings_count += 1
+                    total_cost += holding['total_cost']
 
-                if quantity > 0:
-                    # Get current price for the security
-                    current_price = PriceHistoryService.get_price_for_date(
-                        security, target_date
+                    # Get current price for this security
+                    current_price = PortfolioHistoryService.get_security_price_on_date(
+                        holding['security'], target_date
                     )
 
-                    if current_price and current_price > 0:
-                        market_value = quantity * current_price
-                        total_value += market_value
-                        total_cost += cost
-                        holdings_count += 1
+                    if current_price:
+                        current_value = holding['quantity'] * current_price
+                        holdings_value += current_value
 
-            # Calculate derived metrics
-            unrealized_gains = total_value - total_cost - cash_balance
+                        holdings_list.append({
+                            'security': holding['security'].symbol,
+                            'quantity': holding['quantity'],
+                            'current_price': current_price,
+                            'current_value': current_value,
+                            'total_cost': holding['total_cost']
+                        })
+
+            # Calculate total portfolio value
+            total_value = cash_balance + holdings_value
+
+            # Calculate performance metrics
+            unrealized_gains = holdings_value - total_cost
             total_return_pct = (
                 (unrealized_gains / total_cost * 100)
                 if total_cost > 0 else Decimal('0')
@@ -137,12 +151,13 @@ class PortfolioHistoryService:
                 'success': True,
                 'date': target_date,
                 'total_value': total_value,
-                'total_cost': total_cost,
                 'cash_balance': cash_balance,
+                'holdings_value': holdings_value,
+                'total_cost': total_cost,
                 'holdings_count': holdings_count,
                 'unrealized_gains': unrealized_gains,
                 'total_return_pct': total_return_pct,
-                'holdings': holdings
+                'holdings': holdings_list
             }
 
         except Exception as e:
@@ -152,6 +167,47 @@ class PortfolioHistoryService:
                 'error': str(e),
                 'date': target_date
             }
+
+    @staticmethod
+    def get_security_price_on_date(security, target_date: date) -> Decimal:
+        """
+        Get security price on a specific date
+
+        Args:
+            security: Security instance
+            target_date: Date to get price for
+
+        Returns:
+            Decimal price or None if not found
+        """
+        try:
+            from django.utils import timezone
+            from datetime import datetime
+
+            # Convert date to datetime for comparison
+            if isinstance(target_date, date):
+                target_datetime = timezone.make_aware(datetime.combine(target_date, datetime.min.time()))
+            else:
+                target_datetime = target_date
+
+            # Try to get price on or before target date
+            price_record = PriceHistory.objects.filter(
+                security=security,
+                date__lte=target_datetime
+            ).order_by('-date').first()
+
+            if price_record:
+                return Decimal(str(price_record.close_price))
+
+            # If no price history, try current price
+            if security.current_price:
+                return Decimal(str(security.current_price))
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting price for {security.symbol} on {target_date}: {str(e)}")
+            return None
 
     @staticmethod
     def save_daily_snapshot(portfolio: Portfolio, target_date: date = None,
@@ -352,7 +408,7 @@ class PortfolioHistoryService:
     @staticmethod
     def get_portfolio_performance(portfolio: Portfolio, start_date: date, end_date: date) -> Dict:
         """
-        Get portfolio performance data for charts and analysis
+        Get portfolio performance data for charts and analysis - FIXED VERSION
 
         Args:
             portfolio: Portfolio instance
@@ -376,6 +432,16 @@ class PortfolioHistoryService:
                     'error': 'No historical data found for the specified date range'
                 }
 
+            # Get first and last snapshots for period calculation
+            first_snapshot = snapshots.first()
+            last_snapshot = snapshots.last()
+
+            # Calculate period-specific values
+            start_value = first_snapshot.total_value
+            end_value = last_snapshot.total_value
+            period_return = end_value - start_value
+            period_return_pct = (period_return / start_value * 100) if start_value > 0 else 0
+
             # Prepare chart data and calculate returns
             chart_data = []
             daily_returns = []
@@ -398,62 +464,52 @@ class PortfolioHistoryService:
                         (snapshot.total_value - previous_value) / previous_value * 100
                         if previous_value > 0 else 0
                     )
-                    daily_returns.append(float(daily_return))  # Convert to float
+                    daily_returns.append(float(daily_return))
 
                 previous_value = snapshot.total_value
-
-            # Calculate summary statistics
-            first_snapshot = snapshots.first()
-            last_snapshot = snapshots.last()
-
-            total_return = (
-                (last_snapshot.total_value - first_snapshot.total_value) /
-                first_snapshot.total_value * 100
-                if first_snapshot.total_value > 0 else 0
-            )
 
             # Calculate volatility (standard deviation of daily returns)
             volatility = 0
             if len(daily_returns) > 1:
-                # Convert all values to float to avoid Decimal/float mixing
-                avg_return = sum(daily_returns) / len(daily_returns)
-                variance = sum((r - avg_return) ** 2 for r in daily_returns) / len(daily_returns)
-                volatility = variance ** 0.5
+                import statistics
+                volatility = statistics.stdev(daily_returns)
 
-            # Find best and worst performing days
+            # Calculate best and worst days
             best_day = max(daily_returns) if daily_returns else 0
             worst_day = min(daily_returns) if daily_returns else 0
 
+            # Count positive and negative days
+            positive_days = sum(1 for r in daily_returns if r > 0)
+            negative_days = sum(1 for r in daily_returns if r < 0)
+
+            # Build performance summary with CORRECT period calculations
             performance_summary = {
-                'total_return_pct': float(total_return),
-                'start_value': float(first_snapshot.total_value),
-                'end_value': float(last_snapshot.total_value),
+                'total_return_pct': float(period_return_pct),  # FIXED: Use period return
+                'start_value': float(start_value),  # FIXED: Use start_value
+                'end_value': float(end_value),  # FIXED: Use end_value
                 'volatility': float(volatility),
                 'best_day': float(best_day),
                 'worst_day': float(worst_day),
-                'total_days': len(chart_data),
-                'unrealized_gains': float(last_snapshot.unrealized_gains),
+                'total_days': len(daily_returns),
+                'positive_days': positive_days,
+                'negative_days': negative_days,
+                'unrealized_gains': float(period_return),  # FIXED: Use period return
                 'cash_balance': float(last_snapshot.cash_balance)
             }
 
             return {
                 'success': True,
-                'portfolio': portfolio.name,
-                'start_date': start_date,
-                'end_date': end_date,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
                 'chart_data': chart_data,
-                'performance_summary': performance_summary,
-                'daily_returns': daily_returns
+                'performance_summary': performance_summary
             }
 
         except Exception as e:
-            logger.error(f"Error getting performance data for {portfolio.name}: {str(e)}")
+            logger.error(f"Error getting portfolio performance for {portfolio.name}: {str(e)}")
             return {
                 'success': False,
-                'error': str(e),
-                'portfolio': portfolio.name,
-                'start_date': start_date,
-                'end_date': end_date
+                'error': str(e)
             }
 
     @staticmethod
