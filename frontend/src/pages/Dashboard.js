@@ -12,7 +12,11 @@ import {
   Button,
   Stack,
   Chip,
-  Divider
+  Divider,
+  IconButton,
+  Collapse,
+  Paper,
+  Tooltip
 } from '@mui/material';
 import {
   AccountBalance as AccountBalanceIcon,
@@ -20,13 +24,20 @@ import {
   TrendingDown as TrendingDownIcon,
   Add as AddIcon,
   Visibility as VisibilityIcon,
-  Language as LanguageIcon
+  Language as LanguageIcon,
+  ShowChart as ShowChartIcon,
+  Timeline as TimelineIcon,
+  ExpandMore as ExpandMoreIcon,
+  ExpandLess as ExpandLessIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip as RechartsTooltip } from 'recharts';
 import { api, currencyAPI } from '../services/api';
 import { extractDataArray } from '../utils/apiHelpers';
 import CurrencyContext from '../contexts/CurrencyContext';
 import CurrencySelector from '../components/CurrencySelector';
-import PortfolioDialog from '../components/PortfolioDialog'; // Add this import
+import PortfolioDialog from '../components/PortfolioDialog';
+import PortfolioPerformanceSummary from '../components/PortfolioPerformanceSummary';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -38,9 +49,15 @@ const Dashboard = () => {
   const [loadingConversion, setLoadingConversion] = useState(false);
   const [localDisplayCurrency, setLocalDisplayCurrency] = useState('USD');
   const [currencyBreakdownConversions, setCurrencyBreakdownConversions] = useState({});
-
-  // Add state for portfolio dialog
   const [showPortfolioDialog, setShowPortfolioDialog] = useState(false);
+
+  // New Phase 5 features
+  const [showPerformanceOverview, setShowPerformanceOverview] = useState(true);
+  const [showAssetAllocation, setShowAssetAllocation] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Chart colors for consistency
+  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#ffc658', '#8dd1e1'];
 
   // Use context values if available, otherwise use local state
   const displayCurrency = currencyContext?.displayCurrency || localDisplayCurrency;
@@ -51,7 +68,6 @@ const Dashboard = () => {
   }, []);
 
   useEffect(() => {
-    // Calculate converted totals when portfolios or display currency changes
     if (portfolios.length > 0) {
       calculateConvertedTotals();
       updateCurrencyBreakdownConversions();
@@ -62,11 +78,8 @@ const Dashboard = () => {
     try {
       setLoading(true);
       const response = await api.portfolios.getAll();
-
-      // Use the helper to extract data array
       const portfoliosData = extractDataArray(response);
       setPortfolios(portfoliosData);
-
       setError('');
     } catch (err) {
       console.error('Error fetching portfolios:', err);
@@ -75,6 +88,12 @@ const Dashboard = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchPortfolios();
+    setRefreshing(false);
   };
 
   const formatCurrency = (amount, currency = 'USD') => {
@@ -90,36 +109,19 @@ const Dashboard = () => {
 
   const calculateConvertedTotals = async () => {
     setLoadingConversion(true);
-    console.log('Starting currency conversion, display currency:', displayCurrency);
-
     try {
       let totalValue = 0;
       let totalGainLoss = 0;
       let totalCash = 0;
 
-      // Helper function to round amounts to 8 decimal places
-      const roundAmount = (amount) => {
-        return Math.round(amount * 100000000) / 100000000;
-      };
+      const roundAmount = (amount) => Math.round(amount * 100000000) / 100000000;
 
-      // Convert each portfolio's values to display currency
       for (const portfolio of portfolios) {
         const currency = portfolio.base_currency || 'USD';
-
-        // Use total_value_with_cash if available, otherwise calculate it
         const portfolioTotalValue = portfolio.total_value_with_cash ||
           (parseFloat(portfolio.total_value || 0) + parseFloat(portfolio.cash_balance || 0));
-
         const gainLoss = parseFloat(portfolio.total_gain_loss || 0);
         const cash = parseFloat(portfolio.cash_balance || 0);
-
-        console.log(`Portfolio ${portfolio.name}: ${currency} -> ${displayCurrency}`, {
-          total_value_with_cash: portfolioTotalValue,
-          total_value: portfolio.total_value,
-          cash_balance: portfolio.cash_balance,
-          gainLoss,
-          currency
-        });
 
         if (currency === displayCurrency) {
           totalValue += portfolioTotalValue;
@@ -127,42 +129,33 @@ const Dashboard = () => {
           totalCash += cash;
         } else {
           try {
-            // Convert total portfolio value (including cash) - with rounding
             const roundedTotalValue = roundAmount(portfolioTotalValue);
             const response = await currencyAPI.convert({
               amount: roundedTotalValue,
               from_currency: currency,
               to_currency: displayCurrency
             });
+            totalValue += response.data.converted_amount;
 
-            console.log(`Converting ${roundedTotalValue} ${currency} to ${displayCurrency}:`, response.data);
-            const convertedValue = parseFloat(response.data.converted_amount || portfolioTotalValue);
+            if (gainLoss !== 0) {
+              const gainLossResponse = await currencyAPI.convert({
+                amount: roundAmount(Math.abs(gainLoss)),
+                from_currency: currency,
+                to_currency: displayCurrency
+              });
+              totalGainLoss += gainLoss >= 0 ? gainLossResponse.data.converted_amount : -gainLossResponse.data.converted_amount;
+            }
 
-            // Convert gain/loss separately - with rounding
-            const roundedGainLoss = roundAmount(gainLoss);
-            const gainLossResponse = await currencyAPI.convert({
-              amount: roundedGainLoss,
-              from_currency: currency,
-              to_currency: displayCurrency
-            });
-            const convertedGainLoss = parseFloat(gainLossResponse.data.converted_amount || gainLoss);
-
-            // Convert cash separately - with rounding
-            const roundedCash = roundAmount(cash);
-            const cashResponse = await currencyAPI.convert({
-              amount: roundedCash,
-              from_currency: currency,
-              to_currency: displayCurrency
-            });
-            const convertedCash = parseFloat(cashResponse.data.converted_amount || cash);
-
-            totalValue += convertedValue;
-            totalGainLoss += convertedGainLoss;
-            totalCash += convertedCash;
-
-          } catch (conversionError) {
-            console.error(`Failed to convert ${currency} to ${displayCurrency}:`, conversionError);
-            // Fallback: use original values (not ideal, but prevents complete failure)
+            if (cash !== 0) {
+              const cashResponse = await currencyAPI.convert({
+                amount: roundAmount(cash),
+                from_currency: currency,
+                to_currency: displayCurrency
+              });
+              totalCash += cashResponse.data.converted_amount;
+            }
+          } catch (err) {
+            console.error(`Failed to convert ${currency} to ${displayCurrency}:`, err);
             totalValue += portfolioTotalValue;
             totalGainLoss += gainLoss;
             totalCash += cash;
@@ -170,16 +163,6 @@ const Dashboard = () => {
         }
       }
 
-      setConvertedTotals({
-        totalValue,
-        totalGainLoss,
-        totalCash
-      });
-
-      console.log('Conversion completed:', { totalValue, totalGainLoss, totalCash });
-    } catch (err) {
-      console.error('Error in calculateConvertedTotals:', err);
-      // Fallback to original calculation without conversion
       const totals = portfolios.reduce((acc, portfolio) => {
         acc.totalValue += parseFloat(portfolio.total_value_with_cash || portfolio.total_value || 0);
         acc.totalGainLoss += parseFloat(portfolio.total_gain_loss || 0);
@@ -193,15 +176,11 @@ const Dashboard = () => {
     }
   };
 
-  // Calculate totals by currency (original grouped view)
   const calculateTotalsByCurrency = () => {
-    if (!Array.isArray(portfolios)) {
-      return {};
-    }
+    if (!Array.isArray(portfolios)) return {};
 
     return portfolios.reduce((acc, portfolio) => {
       const currency = portfolio.base_currency || 'USD';
-
       if (!acc[currency]) {
         acc[currency] = {
           totalValue: 0,
@@ -210,25 +189,18 @@ const Dashboard = () => {
           count: 0
         };
       }
-
       acc[currency].totalValue += parseFloat(portfolio.total_value_with_cash || portfolio.total_value || 0);
       acc[currency].totalGainLoss += parseFloat(portfolio.total_gain_loss || 0);
       acc[currency].totalCash += parseFloat(portfolio.cash_balance || 0);
       acc[currency].count += 1;
-
       return acc;
     }, {});
   };
 
-  // Update conversions for currency breakdown display
   const updateCurrencyBreakdownConversions = async () => {
     const conversions = {};
     const totalsByCurrency = calculateTotalsByCurrency();
-
-    // Helper function to round amounts to 8 decimal places
-    const roundAmount = (amount) => {
-      return Math.round(amount * 100000000) / 100000000;
-    };
+    const roundAmount = (amount) => Math.round(amount * 100000000) / 100000000;
 
     for (const currency of Object.keys(totalsByCurrency)) {
       if (currency !== displayCurrency) {
@@ -245,19 +217,50 @@ const Dashboard = () => {
         }
       }
     }
-
     setCurrencyBreakdownConversions(conversions);
   };
 
-  // Handler for opening portfolio creation dialog
+  // Prepare data for asset allocation pie chart
+  const prepareAssetAllocationData = () => {
+    const assetTypes = {};
+
+    portfolios.forEach(portfolio => {
+      // This is a simplified version - you might want to get detailed asset data from API
+      const value = parseFloat(portfolio.total_value || 0);
+      const type = portfolio.name || 'Portfolio'; // Fallback to portfolio name
+
+      if (assetTypes[type]) {
+        assetTypes[type] += value;
+      } else {
+        assetTypes[type] = value;
+      }
+    });
+
+    return Object.entries(assetTypes).map(([name, value]) => ({
+      name,
+      value,
+      formattedValue: formatCurrency(value, displayCurrency)
+    }));
+  };
+
+  // Prepare data for portfolio distribution pie chart
+  const preparePortfolioDistributionData = () => {
+    return portfolios.map(portfolio => ({
+      name: portfolio.name,
+      value: parseFloat(portfolio.total_value || 0),
+      formattedValue: formatCurrency(portfolio.total_value || 0, portfolio.base_currency || 'USD'),
+      gainLoss: parseFloat(portfolio.total_gain_loss || 0),
+      gainLossPercent: portfolio.gain_loss_percentage || 0
+    }));
+  };
+
   const handleCreatePortfolio = () => {
     setShowPortfolioDialog(true);
   };
 
-  // Handler for closing portfolio dialog and refreshing data
   const handlePortfolioDialogClose = () => {
     setShowPortfolioDialog(false);
-    fetchPortfolios(); // Refresh portfolios list after creation
+    fetchPortfolios();
   };
 
   const totalsByCurrency = calculateTotalsByCurrency();
@@ -272,11 +275,22 @@ const Dashboard = () => {
 
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
-      {/* Header */}
-      <Box display="flex" justifyContent="between" alignItems="center" mb={4}>
+      {/* Header with Refresh */}
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
         <Typography variant="h4" component="h1" fontWeight="bold">
           Portfolio Dashboard
         </Typography>
+        <Tooltip title="Refresh Data">
+          <IconButton onClick={handleRefresh} disabled={refreshing}>
+            <RefreshIcon sx={{
+              animation: refreshing ? 'spin 1s linear infinite' : 'none',
+              '@keyframes spin': {
+                '0%': { transform: 'rotate(0deg)' },
+                '100%': { transform: 'rotate(360deg)' }
+              }
+            }} />
+          </IconButton>
+        </Tooltip>
       </Box>
 
       {error && (
@@ -340,7 +354,7 @@ const Dashboard = () => {
                 </Typography>
               )}
               <Typography variant="caption" color="text.secondary">
-                Unrealized gains/losses
+                Total return
               </Typography>
             </CardContent>
           </Card>
@@ -360,29 +374,176 @@ const Dashboard = () => {
                 </Typography>
               )}
               <Typography variant="caption" color="text.secondary">
-                Available for investment
+                Available cash
               </Typography>
             </CardContent>
           </Card>
         </Grid>
       </Grid>
 
+      {/* Performance Overview Section */}
+      {portfolios.length > 0 && (
+        <>
+          <Card sx={{ mb: 4 }}>
+            <CardContent>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <TimelineIcon color="primary" />
+                  Portfolio Performance Overview
+                </Typography>
+                <IconButton onClick={() => setShowPerformanceOverview(!showPerformanceOverview)}>
+                  {showPerformanceOverview ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+              </Box>
+
+              <Collapse in={showPerformanceOverview}>
+                <Grid container spacing={3}>
+                  {portfolios.slice(0, 4).map(portfolio => (
+                    <Grid item xs={12} sm={6} md={4} lg={3} key={portfolio.id}>
+                      <Card variant="outlined">
+                        <CardContent sx={{ p: 2 }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                            <Typography variant="subtitle2" noWrap>
+                              {portfolio.name}
+                            </Typography>
+                            <IconButton
+                              size="small"
+                              onClick={() => navigate(`/portfolios/${portfolio.id}`)}
+                            >
+                              <ShowChartIcon fontSize="small" />
+                            </IconButton>
+                          </Box>
+
+                          <PortfolioPerformanceSummary
+                            portfolioId={portfolio.id}
+                            period="3M"
+                            currency={portfolio.base_currency || 'USD'}
+                            showTitle={false}
+                            compact={true}
+                          />
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  ))}
+
+                  {portfolios.length > 4 && (
+                    <Grid item xs={12}>
+                      <Box sx={{ textAlign: 'center', py: 2 }}>
+                        <Typography variant="body2" color="text.secondary">
+                          Showing 4 of {portfolios.length} portfolios
+                        </Typography>
+                      </Box>
+                    </Grid>
+                  )}
+                </Grid>
+              </Collapse>
+            </CardContent>
+          </Card>
+
+          {/* Asset Allocation Charts */}
+          <Card sx={{ mb: 4 }}>
+            <CardContent>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <AccountBalanceIcon color="primary" />
+                  Asset Allocation
+                </Typography>
+                <IconButton onClick={() => setShowAssetAllocation(!showAssetAllocation)}>
+                  {showAssetAllocation ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+              </Box>
+
+              <Collapse in={showAssetAllocation}>
+                <Grid container spacing={3}>
+                  <Grid item xs={12} md={6}>
+                    <Paper sx={{ p: 2, height: 300 }}>
+                      <Typography variant="subtitle1" gutterBottom textAlign="center">
+                        Portfolio Distribution
+                      </Typography>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={preparePortfolioDistributionData()}
+                            cx="50%"
+                            cy="50%"
+                            labelLine={false}
+                            outerRadius={80}
+                            fill="#8884d8"
+                            dataKey="value"
+                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                          >
+                            {preparePortfolioDistributionData().map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <RechartsTooltip
+                            formatter={(value, name) => [
+                              formatCurrency(value, displayCurrency),
+                              name
+                            ]}
+                          />
+                          <Legend />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </Paper>
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <Paper sx={{ p: 2, height: 300 }}>
+                      <Typography variant="subtitle1" gutterBottom textAlign="center">
+                        Currency Breakdown
+                      </Typography>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={Object.entries(totalsByCurrency).map(([currency, data]) => ({
+                              name: currency,
+                              value: data.totalValue,
+                              count: data.count
+                            }))}
+                            cx="50%"
+                            cy="50%"
+                            labelLine={false}
+                            outerRadius={80}
+                            fill="#8884d8"
+                            dataKey="value"
+                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                          >
+                            {Object.keys(totalsByCurrency).map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <RechartsTooltip
+                            formatter={(value, name) => [
+                              formatCurrency(value, name),
+                              `${name} (${totalsByCurrency[name]?.count || 0} portfolios)`
+                            ]}
+                          />
+                          <Legend />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </Paper>
+                  </Grid>
+                </Grid>
+              </Collapse>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
       {/* Currency Breakdown */}
       {Object.keys(totalsByCurrency).length > 1 && (
-        <Box mb={4}>
-          <Typography variant="h6" gutterBottom>
-            By Currency
-          </Typography>
-          <Grid container spacing={2}>
-            {Object.entries(totalsByCurrency).map(([currency, data]) => (
-              <Grid item xs={12} sm={6} md={4} key={currency}>
-                <Card variant="outlined">
-                  <CardContent>
-                    <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
-                      {currency}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {data.count} portfolio{data.count !== 1 ? 's' : ''}
+        <Card sx={{ mb: 4 }}>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>
+              Currency Breakdown
+            </Typography>
+            <Grid container spacing={2}>
+              {Object.entries(totalsByCurrency).map(([currency, data]) => (
+                <Grid item xs={12} sm={6} md={4} key={currency}>
+                  <Paper sx={{ p: 2 }}>
+                    <Typography variant="subtitle2" color="text.secondary">
+                      {currency} ({data.count} portfolio{data.count !== 1 ? 's' : ''})
                     </Typography>
                     <Typography variant="h6">
                       {formatCurrency(data.totalValue, currency)}
@@ -392,54 +553,58 @@ const Dashboard = () => {
                         ≈ {formatCurrency(currencyBreakdownConversions[currency], displayCurrency)}
                       </Typography>
                     )}
-                  </CardContent>
-                </Card>
-              </Grid>
-            ))}
-          </Grid>
-        </Box>
+                  </Paper>
+                </Grid>
+              ))}
+            </Grid>
+          </CardContent>
+        </Card>
       )}
 
-      <Divider sx={{ my: 4 }} />
-
       {/* Individual Portfolios */}
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h5" fontWeight="bold">
-          Your Portfolios
-        </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={handleCreatePortfolio} // Updated to use dialog instead of navigation
-        >
-          Create Portfolio
-        </Button>
-      </Box>
+      <Typography variant="h5" gutterBottom sx={{ mt: 4, mb: 3 }}>
+        Your Portfolios
+      </Typography>
 
       <Grid container spacing={3}>
-        {portfolios.map((portfolio) => (
-          <Grid item xs={12} md={6} lg={4} key={portfolio.id}>
+        {portfolios.map(portfolio => (
+          <Grid item xs={12} sm={6} md={4} key={portfolio.id}>
             <Card>
               <CardContent>
                 <Stack spacing={2}>
-                  <Box display="flex" justifyContent="space-between" alignItems="flex-start">
-                    <Box>
-                      <Typography variant="h6" fontWeight="bold">
-                        {portfolio.name}
-                      </Typography>
-                      <Chip
-                        label={portfolio.base_currency || 'USD'}
-                        size="small"
-                        variant="outlined"
-                        icon={<AccountBalanceIcon />}
-                      />
-                    </Box>
-                    <Typography variant="h5" fontWeight="bold">
-                      {formatCurrency(portfolio.total_value_with_cash || portfolio.total_value || 0, portfolio.base_currency || 'USD')}
+                  <Box display="flex" justifyContent="space-between" alignItems="center">
+                    <Typography variant="h6" noWrap>
+                      {portfolio.name}
                     </Typography>
+                    <Chip
+                      label={portfolio.base_currency || 'USD'}
+                      size="small"
+                      variant="outlined"
+                    />
                   </Box>
 
+                  <Divider />
+
                   <Box display="flex" justifyContent="space-between">
+                    <Box>
+                      <Typography variant="caption" color="text.secondary">
+                        Total Value
+                      </Typography>
+                      <Typography variant="h6">
+                        {formatCurrency(portfolio.total_value || 0, portfolio.base_currency || 'USD')}
+                      </Typography>
+                    </Box>
+                    <Box textAlign="right">
+                      <Typography variant="caption" color="text.secondary">
+                        Assets
+                      </Typography>
+                      <Typography variant="h6">
+                        {portfolio.asset_count || 0}
+                      </Typography>
+                    </Box>
+                  </Box>
+
+                  <Box display="flex" justifyContent="space-between" alignItems="center">
                     <Box>
                       <Typography variant="caption" color="text.secondary">
                         Gain/Loss
@@ -491,7 +656,7 @@ const Dashboard = () => {
                 <Button
                   variant="contained"
                   startIcon={<AddIcon />}
-                  onClick={handleCreatePortfolio} // Updated to use dialog instead of navigation
+                  onClick={handleCreatePortfolio}
                 >
                   Create Portfolio
                 </Button>
@@ -505,7 +670,7 @@ const Dashboard = () => {
       <PortfolioDialog
         open={showPortfolioDialog}
         onClose={handlePortfolioDialogClose}
-        portfolio={null} // null for creating new portfolio
+        portfolio={null}
       />
     </Container>
   );

@@ -200,10 +200,23 @@ class PriceHistoryService:
         Validate price data integrity for a security
         """
         try:
+            from django.db.models import Min, Max
+
             total_records = PriceHistory.objects.filter(security=security).count()
 
             if total_records == 0:
-                return {'valid': False, 'message': 'No price data found'}
+                return {
+                    'valid': False,
+                    'message': 'No price data found',
+                    'total_records': 0,
+                    'invalid_prices': 0,
+                    'recent_records': 0,
+                    'gaps': 0,
+                    'date_range': {
+                        'min_date': None,
+                        'max_date': None
+                    }
+                }
 
             # Check for invalid prices (negative or zero)
             invalid_prices = PriceHistory.objects.filter(
@@ -218,17 +231,40 @@ class PriceHistoryService:
                 date__date__gte=recent_date
             ).count()
 
+            # Get date range
+            date_range_result = PriceHistory.objects.filter(
+                security=security
+            ).aggregate(
+                min_date=Min('date'),
+                max_date=Max('date')
+            )
+
             return {
                 'valid': invalid_prices == 0,
                 'total_records': total_records,
                 'invalid_prices': invalid_prices,
                 'recent_records': recent_records,
-                'gaps': 0  # Simplified for now
+                'gaps': 0,  # Simplified for now
+                'date_range': {
+                    'min_date': date_range_result['min_date'],
+                    'max_date': date_range_result['max_date']
+                }
             }
 
         except Exception as e:
             logger.error(f"Error validating price data for {security.symbol}: {str(e)}")
-            return {'valid': False, 'error': str(e)}
+            return {
+                'valid': False,
+                'error': str(e),
+                'total_records': 0,
+                'invalid_prices': 0,
+                'recent_records': 0,
+                'gaps': 0,
+                'date_range': {
+                    'min_date': None,
+                    'max_date': None
+                }
+            }
 
     @classmethod
     def detect_price_gaps(cls, security, max_gap_days=7):
