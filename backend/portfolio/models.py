@@ -18,7 +18,6 @@ class Portfolio(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     is_default = models.BooleanField(default=False)
-    currency = models.CharField(max_length=3, default='USD')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     base_currency = models.CharField(
@@ -54,7 +53,7 @@ class Portfolio(models.Model):
         if is_new:
             PortfolioCashAccount.objects.create(
                 portfolio=self,
-                currency=self.base_currency or self.currency  # Use base_currency first
+                currency=self.base_currency
             )
 
     def get_holdings(self):
@@ -635,7 +634,7 @@ class Transaction(models.Model):
         # Calculate base amount if not provided
         if not self.base_amount and self.portfolio:
             # Use base_currency, not currency
-            portfolio_currency = self.portfolio.base_currency or self.portfolio.currency
+            portfolio_currency = self.portfolio.base_currency
 
             if self.currency == portfolio_currency:
                 # Calculate total including fees for the base amount

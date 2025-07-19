@@ -1674,14 +1674,14 @@ def portfolio_holdings_consolidated(request, portfolio_id):
     holdings = portfolio.get_holdings_cached()
 
     consolidated_assets = []
-    portfolio_currency = portfolio.base_currency or portfolio.currency
+    portfolio_currency = portfolio.base_currency
 
     for security_id, data in holdings.items():
         # Build transactions list
         transactions = []
 
         # Calculate proper average costs in both currencies
-        portfolio_base_currency = portfolio.base_currency or portfolio.currency
+        portfolio_base_currency = portfolio.base_currency
         security_currency = data['security'].currency
 
         # ✅ USE the correct values from get_holdings() (which already accounts for dividends but NOT fees)
@@ -1935,7 +1935,6 @@ def portfolio_holdings_consolidated(request, portfolio_id):
         'id': portfolio.id,
         'name': portfolio.name,
         'description': portfolio.description,
-        'currency': portfolio.currency,
         'base_currency': portfolio.base_currency,
         'is_default': portfolio.is_default,
         'created_at': portfolio.created_at,

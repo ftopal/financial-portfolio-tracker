@@ -94,7 +94,7 @@ class PortfolioHistoryService:
 
                         # FIXED: Use base_currency instead of currency
                         transaction_currency = security.currency or 'USD'
-                        portfolio_currency = portfolio.base_currency or portfolio.currency or 'GBP'
+                        portfolio_currency = portfolio.base_currency or 'GBP'
 
                         # Calculate raw cost in transaction currency
                         raw_cost = transaction.quantity * transaction.price
@@ -164,7 +164,7 @@ class PortfolioHistoryService:
                         # FIXED: Apply currency conversion for security prices
                         security = holding['security']
                         security_currency = security.currency or 'USD'
-                        portfolio_currency = portfolio.base_currency or portfolio.currency or 'GBP'
+                        portfolio_currency = portfolio.base_currency or 'GBP'
 
                         # Calculate raw current value in security's currency
                         raw_current_value = holding['quantity'] * current_price

@@ -46,10 +46,10 @@ def update_portfolio_base_amounts():
     updated_count = 0
     for transaction in transactions:
         try:
-            if transaction.currency != transaction.portfolio.currency:
+            if transaction.currency != transaction.portfolio.base_currency:
                 exchange_rate = CurrencyService.get_exchange_rate(
                     transaction.currency,
-                    transaction.portfolio.currency,
+                    transaction.portfolio.base_currency,
                     transaction.transaction_date.date()
                 )
                 if exchange_rate:

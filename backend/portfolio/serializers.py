@@ -417,7 +417,7 @@ class PortfolioSerializer(serializers.ModelSerializer):
     class Meta:
         model = Portfolio
         fields = [
-            'id', 'name', 'description', 'is_default', 'currency',
+            'id', 'name', 'description', 'is_default',
             'created_at', 'updated_at', 'total_value', 'total_cost',
             'total_gains', 'holdings_count', 'asset_count', 'transaction_count',
             'total_gain_loss', 'gain_loss_percentage', 'cash_balance',
