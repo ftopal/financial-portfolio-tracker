@@ -213,43 +213,231 @@ class PortfolioViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def performance(self, request, pk=None):
         """
-        Get portfolio performance data with chart data
-        Fixed version to handle all calculation issues
+        Get portfolio performance data for charts with enhanced empty portfolio handling
+
+        Query Parameters:
+        - period: 1M, 3M, 6M, 1Y, YTD, ALL (default: 1Y)
+        - start_date: YYYY-MM-DD format (optional)
+        - end_date: YYYY-MM-DD format (optional)
         """
-        portfolio = get_object_or_404(Portfolio, pk=pk)
-
-        # Get query parameters
-        period = request.query_params.get('period', '1Y')
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
-
         try:
-            # Calculate date range
-            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date else date.today()
+            portfolio = self.get_object()
 
-            if start_date:
-                start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
-            else:
-                start_date_obj = self.get_period_start_date(period, end_date_obj)
-
-            # Get portfolio performance data
-            performance_data = self.get_portfolio_performance_data(
-                portfolio, start_date_obj, end_date_obj
-            )
-
-            # Apply retention policy
-            retention_applied = self.apply_retention_policy(
-                request.user, start_date_obj, end_date_obj
-            )
-
-            if retention_applied:
-                performance_data['retention_applied'] = True
-                performance_data['retention_message'] = (
-                    f"Historical data limited to {self.get_user_retention_days(request.user)} days. "
-                    "Upgrade to Premium for unlimited access."
+            # Check user permissions
+            if portfolio.user != request.user:
+                return Response(
+                    {'error': 'Permission denied'},
+                    status=status.HTTP_403_FORBIDDEN
                 )
 
-            return Response(performance_data)
+            # Get query parameters
+            period = request.query_params.get('period', '1Y')
+            start_date_str = request.query_params.get('start_date')
+            end_date_str = request.query_params.get('end_date')
+
+            # Validate period
+            valid_periods = ['1M', '3M', '6M', '1Y', 'YTD', 'ALL']
+            if period not in valid_periods:
+                return Response(
+                    {'error': f'Invalid period. Must be one of: {", ".join(valid_periods)}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Parse end date
+            try:
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date() if end_date_str else date.today()
+            except ValueError:
+                return Response(
+                    {'error': 'Invalid end_date format. Use YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Parse start date
+            start_date = None
+            if start_date_str:
+                try:
+                    start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                except ValueError:
+                    return Response(
+                        {'error': 'Invalid start_date format. Use YYYY-MM-DD'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                start_date = self._calculate_period_start_date(period, end_date)
+
+            # Apply retention policy for free users
+            retention_limit = self._get_user_retention_limit(request.user)
+            retention_applied = False
+            if retention_limit:
+                earliest_allowed = end_date - timedelta(days=retention_limit)
+                if start_date < earliest_allowed:
+                    start_date = earliest_allowed
+                    retention_applied = True
+
+            # Check if portfolio has any transactions (better empty portfolio detection)
+            from django.db.models import Count
+            has_transactions = portfolio.transactions.aggregate(
+                total=Count('id')
+            )['total'] > 0
+
+            if not has_transactions:
+                # Portfolio is empty - return friendly empty state
+                return Response({
+                    'portfolio_id': portfolio.id,
+                    'portfolio_name': portfolio.name,
+                    'period': period,
+                    'start_date': start_date.isoformat(),
+                    'end_date': end_date.isoformat(),
+                    'empty_portfolio': True,
+                    'message': 'No historical data available. Add transactions to see portfolio performance.',
+                    'chart_data': {
+                        'series': [{
+                            'name': 'Portfolio Value',
+                            'data': []
+                        }],
+                        'categories': [],
+                        'raw_data': []
+                    },
+                    'summary': {
+                        'current_value': 0.0,
+                        'total_return': 0.0,
+                        'total_return_percentage': 0.0,
+                        'volatility': 0.0,
+                        'best_day': 0.0,
+                        'worst_day': 0.0,
+                        'best_day_date': None,
+                        'worst_day_date': None,
+                        'total_days': 0,
+                        'data_points': 0
+                    },
+                    'retention_applied': retention_applied
+                })
+
+            # Try to get performance data from service
+            from portfolio.services.portfolio_history_service import PortfolioHistoryService
+
+            performance_data = PortfolioHistoryService.get_portfolio_performance(
+                portfolio, start_date, end_date
+            )
+
+            if not performance_data['success']:
+                error_message = performance_data.get('error', '')
+
+                # Handle "No historical data found" error more gracefully
+                if 'No historical data found' in error_message or 'historical data' in error_message.lower():
+                    # This means portfolio exists but no historical snapshots exist yet
+                    # Create some snapshots and try again, or return empty state
+                    try:
+                        # Try to create a current snapshot if possible
+                        current_result = PortfolioHistoryService.calculate_portfolio_value_on_date(
+                            portfolio, date.today()
+                        )
+
+                        if current_result['success'] and current_result['total_value'] > 0:
+                            # Portfolio has current value but no history - create snapshot
+                            PortfolioHistoryService.save_daily_snapshot(portfolio, date.today())
+
+                            # Retry getting performance data
+                            performance_data = PortfolioHistoryService.get_portfolio_performance(
+                                portfolio, start_date, end_date
+                            )
+
+                            if not performance_data['success']:
+                                # Still no data - return empty state with current value
+                                return Response({
+                                    'portfolio_id': portfolio.id,
+                                    'portfolio_name': portfolio.name,
+                                    'period': period,
+                                    'start_date': start_date.isoformat(),
+                                    'end_date': end_date.isoformat(),
+                                    'insufficient_data': True,
+                                    'message': 'Insufficient historical data for the selected period. More data will be available over time.',
+                                    'chart_data': {
+                                        'series': [{
+                                            'name': 'Portfolio Value',
+                                            'data': [{
+                                                'x': date.today().isoformat(),
+                                                'y': float(current_result['total_value'])
+                                            }]
+                                        }],
+                                        'categories': [date.today().isoformat()],
+                                        'raw_data': [{
+                                            'date': date.today(),
+                                            'value': float(current_result['total_value']),
+                                            'total_return_pct': 0.0
+                                        }]
+                                    },
+                                    'summary': {
+                                        'current_value': float(current_result['total_value']),
+                                        'total_return': 0.0,
+                                        'total_return_percentage': 0.0,
+                                        'volatility': 0.0,
+                                        'best_day': 0.0,
+                                        'worst_day': 0.0,
+                                        'best_day_date': None,
+                                        'worst_day_date': None,
+                                        'total_days': 1,
+                                        'data_points': 1
+                                    },
+                                    'retention_applied': retention_applied
+                                })
+                        else:
+                            # Portfolio has no current value either - truly empty
+                            return Response({
+                                'portfolio_id': portfolio.id,
+                                'portfolio_name': portfolio.name,
+                                'period': period,
+                                'start_date': start_date.isoformat(),
+                                'end_date': end_date.isoformat(),
+                                'empty_portfolio': True,
+                                'message': 'No historical data available. Add transactions to see portfolio performance.',
+                                'chart_data': {
+                                    'series': [{
+                                        'name': 'Portfolio Value',
+                                        'data': []
+                                    }],
+                                    'categories': [],
+                                    'raw_data': []
+                                },
+                                'summary': {
+                                    'current_value': 0.0,
+                                    'total_return': 0.0,
+                                    'total_return_percentage': 0.0,
+                                    'volatility': 0.0,
+                                    'best_day': 0.0,
+                                    'worst_day': 0.0,
+                                    'best_day_date': None,
+                                    'worst_day_date': None,
+                                    'total_days': 0,
+                                    'data_points': 0
+                                },
+                                'retention_applied': retention_applied
+                            })
+
+                    except Exception as e:
+                        logger.error(f"Error creating initial snapshot: {str(e)}")
+                        # Fall through to original error handling
+                        pass
+
+                # For other errors, return the original error
+                return Response(
+                    {'error': error_message},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            # Normal case - we have performance data
+            chart_data = self._format_chart_data(performance_data['chart_data'])
+
+            return Response({
+                'portfolio_id': portfolio.id,
+                'portfolio_name': portfolio.name,
+                'period': period,
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'chart_data': chart_data,
+                'summary': performance_data['performance_summary'],
+                'retention_applied': retention_applied
+            })
 
         except ValueError as e:
             return Response(
@@ -950,97 +1138,9 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             )
 
     @action(detail=True, methods=['get'])
-    def performance(self, request, pk=None):
-        """
-        Get portfolio performance data for charts
-
-        Query Parameters:
-        - period: 1M, 3M, 6M, 1Y, YTD, ALL (default: 1Y)
-        - start_date: YYYY-MM-DD format (overrides period)
-        - end_date: YYYY-MM-DD format (defaults to today)
-        """
-        try:
-            portfolio = self.get_object()
-
-            # Check user permissions
-            if portfolio.user != request.user:
-                return Response(
-                    {'error': 'Permission denied'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-            # Parse query parameters
-            period = request.query_params.get('period', '1Y')
-            start_date_str = request.query_params.get('start_date')
-            end_date_str = request.query_params.get('end_date')
-
-            # Calculate date range
-            end_date = date.today()
-            if end_date_str:
-                try:
-                    end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-                except ValueError:
-                    return Response(
-                        {'error': 'Invalid end_date format. Use YYYY-MM-DD'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
-            # Calculate start date based on period or explicit start_date
-            start_date = None
-            if start_date_str:
-                try:
-                    start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-                except ValueError:
-                    return Response(
-                        {'error': 'Invalid start_date format. Use YYYY-MM-DD'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-            else:
-                start_date = self._calculate_period_start_date(period, end_date)
-
-            # Apply retention policy for free users
-            retention_limit = self._get_user_retention_limit(request.user)
-            if retention_limit:
-                earliest_allowed = end_date - timedelta(days=retention_limit)
-                if start_date < earliest_allowed:
-                    start_date = earliest_allowed
-
-            # Get performance data from service
-            performance_data = PortfolioHistoryService.get_portfolio_performance(
-                portfolio, start_date, end_date
-            )
-
-            if not performance_data['success']:
-                return Response(
-                    {'error': performance_data.get('error', 'Failed to calculate performance')},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-
-            # Format response for frontend (using correct keys from service)
-            chart_data = self._format_chart_data(performance_data['chart_data'])
-
-            return Response({
-                'portfolio_id': portfolio.id,
-                'portfolio_name': portfolio.name,
-                'period': period,
-                'start_date': start_date.isoformat(),
-                'end_date': end_date.isoformat(),
-                'chart_data': chart_data,
-                'summary': performance_data['performance_summary'],  # FIXED: use correct key
-                'retention_applied': retention_limit is not None
-            })
-
-        except Exception as e:
-            logger.error(f"Error in portfolio performance endpoint: {str(e)}")
-            return Response(
-                {'error': 'Internal server error'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    @action(detail=True, methods=['get'])
     def performance_summary(self, request, pk=None):
         """
-        Get portfolio performance summary statistics
+        Get portfolio performance summary statistics with enhanced empty portfolio handling
 
         Query Parameters:
         - period: 1M, 3M, 6M, 1Y, YTD, ALL (default: 1Y)
@@ -1061,31 +1161,130 @@ class PortfolioViewSet(viewsets.ModelViewSet):
 
             # Apply retention policy
             retention_limit = self._get_user_retention_limit(request.user)
+            retention_applied = False
             if retention_limit:
                 earliest_allowed = end_date - timedelta(days=retention_limit)
                 if start_date < earliest_allowed:
                     start_date = earliest_allowed
+                    retention_applied = True
+
+            # Check if portfolio has any transactions
+            from django.db.models import Count
+            has_transactions = portfolio.transactions.aggregate(
+                total=Count('id')
+            )['total'] > 0
+
+            if not has_transactions:
+                # Portfolio is empty - return friendly empty summary
+                return Response({
+                    'portfolio_id': portfolio.id,
+                    'portfolio_name': portfolio.name,
+                    'period': period,
+                    'start_date': start_date.isoformat(),
+                    'end_date': end_date.isoformat(),
+                    'empty_portfolio': True,
+                    'message': 'No data available. Add transactions to see portfolio performance.',
+                    'summary': {
+                        'current_value': 0.0,
+                        'total_return': 0.0,
+                        'total_return_percentage': 0.0,
+                        'volatility': 0.0,
+                        'best_day': 0.0,
+                        'worst_day': 0.0,
+                        'best_day_date': None,
+                        'worst_day_date': None,
+                        'total_days': 0,
+                        'data_points': 0
+                    },
+                    'retention_applied': retention_applied
+                })
 
             # Get performance data
+            from portfolio.services.portfolio_history_service import PortfolioHistoryService
+
             performance_data = PortfolioHistoryService.get_portfolio_performance(
                 portfolio, start_date, end_date
             )
 
             if not performance_data['success']:
+                error_message = performance_data.get('error', '')
+
+                # Handle no historical data gracefully
+                if 'No historical data found' in error_message or 'historical data' in error_message.lower():
+                    try:
+                        # Try to get current portfolio value
+                        current_result = PortfolioHistoryService.calculate_portfolio_value_on_date(
+                            portfolio, date.today()
+                        )
+
+                        if current_result['success'] and current_result['total_value'] > 0:
+                            # Return current value with no historical performance
+                            return Response({
+                                'portfolio_id': portfolio.id,
+                                'portfolio_name': portfolio.name,
+                                'period': period,
+                                'start_date': start_date.isoformat(),
+                                'end_date': end_date.isoformat(),
+                                'insufficient_data': True,
+                                'message': 'Insufficient historical data for the selected period.',
+                                'summary': {
+                                    'current_value': float(current_result['total_value']),
+                                    'total_return': 0.0,
+                                    'total_return_percentage': 0.0,
+                                    'volatility': 0.0,
+                                    'best_day': 0.0,
+                                    'worst_day': 0.0,
+                                    'best_day_date': None,
+                                    'worst_day_date': None,
+                                    'total_days': 1,
+                                    'data_points': 1
+                                },
+                                'retention_applied': retention_applied
+                            })
+                        else:
+                            # Truly empty portfolio
+                            return Response({
+                                'portfolio_id': portfolio.id,
+                                'portfolio_name': portfolio.name,
+                                'period': period,
+                                'start_date': start_date.isoformat(),
+                                'end_date': end_date.isoformat(),
+                                'empty_portfolio': True,
+                                'message': 'No data available. Add transactions to see portfolio performance.',
+                                'summary': {
+                                    'current_value': 0.0,
+                                    'total_return': 0.0,
+                                    'total_return_percentage': 0.0,
+                                    'volatility': 0.0,
+                                    'best_day': 0.0,
+                                    'worst_day': 0.0,
+                                    'best_day_date': None,
+                                    'worst_day_date': None,
+                                    'total_days': 0,
+                                    'data_points': 0
+                                },
+                                'retention_applied': retention_applied
+                            })
+
+                    except Exception as e:
+                        logger.error(f"Error getting current portfolio value: {str(e)}")
+                        pass
+
+                # For other errors, return the original error
                 return Response(
-                    {'error': performance_data.get('error', 'Failed to calculate performance')},
+                    {'error': error_message},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
-            # Return only summary data (using correct key)
+            # Normal case - return summary data (using correct key)
             return Response({
                 'portfolio_id': portfolio.id,
                 'portfolio_name': portfolio.name,
                 'period': period,
                 'start_date': start_date.isoformat(),
                 'end_date': end_date.isoformat(),
-                'summary': performance_data['performance_summary'],  # FIXED: use correct key
-                'retention_applied': retention_limit is not None
+                'summary': performance_data['performance_summary'],
+                'retention_applied': retention_applied
             })
 
         except Exception as e:
