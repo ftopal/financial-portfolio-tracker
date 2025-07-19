@@ -203,7 +203,7 @@ class CurrencyService:
 
         # Add cash balance
         if hasattr(portfolio, 'cash_account'):
-            cash_currency = portfolio.cash_account.currency or portfolio.currency
+            cash_currency = portfolio.cash_account.currency or portfolio.base_currency
             cash_balance = portfolio.cash_account.balance
 
             if cash_currency == target_currency:

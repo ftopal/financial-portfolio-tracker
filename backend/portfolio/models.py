@@ -60,7 +60,7 @@ class Portfolio(models.Model):
     def get_holdings(self):
         """Calculate current holdings based on transactions - with currency conversion"""
         holdings = {}
-        portfolio_currency = self.base_currency or self.currency
+        portfolio_currency = self.base_currency
         processed_transactions = set()
 
         transactions = self.transactions.filter(
