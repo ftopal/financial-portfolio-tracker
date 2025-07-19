@@ -379,9 +379,9 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             return date(end_date.year, 1, 1)
         elif period == 'ALL':
             # Find the earliest transaction date
-            earliest_transaction = portfolio.transactions.order_by('date').first()
+            earliest_transaction = portfolio.transactions.order_by('transaction_date').first()
             if earliest_transaction:
-                return earliest_transaction.date
+                return earliest_transaction.transaction_date.date()
             else:
                 return end_date - timedelta(days=365)
         else:
