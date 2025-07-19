@@ -231,13 +231,13 @@ const PortfolioPerformanceSummary = ({
 
               <Box sx={{ display: 'flex', gap: 1 }}>
                 <Chip
-                  label={`${summary.days_positive || 0} positive days`}
+                  label={`${summary.positive_days || 0} positive days`}
                   size="small"
                   color="success"
                   variant="outlined"
                 />
                 <Chip
-                  label={`${summary.days_negative || 0} negative days`}
+                  label={`${summary.negative_days || 0} negative days`}
                   size="small"
                   color="error"
                   variant="outlined"

@@ -248,7 +248,7 @@ class CurrencyService:
 
         # Add cash balance - WITH DEBUGGING
         if hasattr(portfolio, 'cash_account'):
-            cash_currency = portfolio.cash_account.currency or portfolio.currency
+            cash_currency = portfolio.cash_account.currency
             cash_balance = portfolio.cash_account.balance
 
             logger.info(f"Cash account found: {cash_currency} {cash_balance}")
@@ -275,7 +275,7 @@ class CurrencyService:
         Calculate the impact of currency movements on portfolio returns
         """
         if base_currency is None:
-            base_currency = portfolio.currency
+            base_currency = portfolio.base_currency
 
         fx_impact = Decimal('0')
 

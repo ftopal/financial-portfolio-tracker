@@ -52,7 +52,7 @@ class Command(BaseCommand):
         """Show basic portfolio information"""
         self.stdout.write(f"\n📊 Portfolio Information:")
         self.stdout.write(f"   Name: {portfolio.name}")
-        self.stdout.write(f"   Currency: {portfolio.currency}")
+        self.stdout.write(f"   Currency: {portfolio.base_currency}")
         self.stdout.write(f"   Base Currency: {getattr(portfolio, 'base_currency', 'N/A')}")
 
         # Show cash account info
@@ -82,7 +82,7 @@ class Command(BaseCommand):
             self.stdout.write(f"   Stored Base Amount: {tx.base_amount}")
 
             # Calculate what the conversion should be
-            if tx.security.currency == 'GBp' and portfolio.currency == 'USD':
+            if tx.security.currency == 'GBp' and portfolio.base_currency == 'USD':
                 # GBp -> GBP -> USD conversion
                 raw_cost_gbp = tx.quantity * tx.price
 
@@ -196,23 +196,23 @@ class Command(BaseCommand):
                     self.stdout.write(f"   Value in GBP: £{value_gbp}")
 
                     # Then convert to portfolio currency if needed
-                    if portfolio.currency != 'GBP':
-                        rate = CurrencyService.get_exchange_rate('GBP', portfolio.currency, date.today())
+                    if portfolio.base_currency != 'GBP':
+                        rate = CurrencyService.get_exchange_rate('GBP', portfolio.base_currency, date.today())
                         if rate:
                             final_value = value_gbp * rate
-                            self.stdout.write(f"   Final Value: {final_value} {portfolio.currency}")
+                            self.stdout.write(f"   Final Value: {final_value} {portfolio.base_currency}")
                         else:
-                            self.stdout.write(f"   No exchange rate found for GBP→{portfolio.currency}")
+                            self.stdout.write(f"   No exchange rate found for GBP→{portfolio.base_currency}")
             except Exception as e:
                 self.stdout.write(f"   Conversion Error: {e}")
 
         # Add cash
         if hasattr(portfolio, 'cash_account'):
             cash = portfolio.cash_account.balance
-            self.stdout.write(f"   Cash: {cash} {portfolio.currency}")
+            self.stdout.write(f"   Cash: {cash} {portfolio.base_currency}")
 
         self.stdout.write(f"\n💡 Expected Results:")
         self.stdout.write(f"   For NG.L: 100 × 1059.50 GBp = 105,950 GBp = £1,059.50")
         self.stdout.write(f"   If portfolio is USD: £1,059.50 × GBP/USD rate")
         self.stdout.write(f"   If portfolio is GBP: £1,059.50 + £20 cash = £1,079.50")
-        self.stdout.write(f"   Current portfolio currency: {portfolio.currency}")
+        self.stdout.write(f"   Current portfolio currency: {portfolio.base_currency}")

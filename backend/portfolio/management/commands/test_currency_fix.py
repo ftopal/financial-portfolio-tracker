@@ -58,7 +58,7 @@ class Command(BaseCommand):
     def show_portfolio_details(self, portfolio):
         """Show current portfolio details"""
         self.stdout.write(f"\n📊 Portfolio Details:")
-        self.stdout.write(f"   Currency: {portfolio.currency}")
+        self.stdout.write(f"   Currency: {portfolio.base_currency}")
 
         # Show holdings
         holdings = portfolio.get_holdings()
@@ -73,7 +73,7 @@ class Command(BaseCommand):
 
             if 'current_value_base_currency' in holding:
                 self.stdout.write(
-                    f"     Current Value (converted): {holding['current_value_base_currency']} {portfolio.currency}")
+                    f"     Current Value (converted): {holding['current_value_base_currency']} {portfolio.base_currency}")
 
         # Show transactions
         transactions = portfolio.transactions.all().order_by('transaction_date')

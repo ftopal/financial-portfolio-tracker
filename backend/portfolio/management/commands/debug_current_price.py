@@ -219,7 +219,7 @@ class Command(BaseCommand):
             from portfolio.services.currency_service import CurrencyService
 
             security_currency = security.currency or 'USD'
-            portfolio_currency = portfolio.base_currency or portfolio.currency or 'GBP'
+            portfolio_currency = portfolio.base_currency or 'GBP'
 
             self.stdout.write(f"   Security currency (normalized): '{security_currency}'")
             self.stdout.write(f"   Portfolio currency (normalized): '{portfolio_currency}'")

@@ -331,7 +331,7 @@ const ConsolidatedPortfolioDetails = () => {
                           Total Value
                         </Typography>
                         <Typography variant="h5" component="div" fontWeight="bold">
-                          {formatCurrency(summary.total_value)}
+                          {formatCurrency(summary.total_value, portfolio?.base_currency)}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
                           Securities + Cash
@@ -352,7 +352,7 @@ const ConsolidatedPortfolioDetails = () => {
                           Securities Value
                         </Typography>
                         <Typography variant="h5" component="div" fontWeight="bold">
-                          {formatCurrency(summary.securities_value || summary.total_value)}
+                          {formatCurrency(summary.securities_value || summary.total_value, portfolio?.base_currency)}
                         </Typography>
                       </Box>
                       <ShowChartIcon color="primary" />
@@ -370,7 +370,7 @@ const ConsolidatedPortfolioDetails = () => {
                           Cash Balance
                         </Typography>
                         <Typography variant="h5" component="div" fontWeight="bold">
-                          {formatCurrency(summary.cash_balance || 0)}
+                          {formatCurrency(summary.cash_balance || 0, portfolio?.base_currency)}
                         </Typography>
                       </Box>
                       <AccountBalanceIcon color="primary" />
@@ -393,7 +393,7 @@ const ConsolidatedPortfolioDetails = () => {
                           fontWeight="bold"
                           color={summary.total_gain_loss >= 0 ? 'success.main' : 'error.main'}
                         >
-                          {formatCurrency(summary.total_gain_loss)}
+                          {formatCurrency(summary.total_gain_loss, portfolio?.base_currency)}
                         </Typography>
                         <Typography
                           variant="caption"
@@ -421,7 +421,7 @@ const ConsolidatedPortfolioDetails = () => {
                           Total Dividends
                         </Typography>
                         <Typography variant="h5" component="div" fontWeight="bold" color="info.main">
-                          {formatCurrency(summary.total_dividends || 0)}
+                          {formatCurrency(summary.total_dividends || 0, portfolio?.base_currency)}
                         </Typography>
                       </Box>
                       <AttachMoneyIcon color="info" />

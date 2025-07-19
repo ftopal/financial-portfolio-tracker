@@ -132,7 +132,7 @@ class TransactionSerializer(serializers.ModelSerializer):
 
         # Calculate exchange rate if currency differs from portfolio currency
         portfolio = validated_data['portfolio']
-        portfolio_currency = portfolio.base_currency or portfolio.currency
+        portfolio_currency = portfolio.base_currency
 
         if currency and currency != portfolio_currency:
             # CHECK IF USER PROVIDED CUSTOM VALUES
@@ -277,7 +277,7 @@ class TransactionSerializer(serializers.ModelSerializer):
         # Similar logic for updates as in create method
         currency = validated_data.get('currency', instance.currency)
         portfolio = instance.portfolio
-        portfolio_currency = portfolio.base_currency or portfolio.currency
+        portfolio_currency = portfolio.base_currency
 
         if currency and currency != portfolio_currency:
             user_exchange_rate = validated_data.get('exchange_rate')
@@ -584,7 +584,7 @@ class CashTransactionSerializer(serializers.ModelSerializer):
 
         # Calculate exchange rate if currency differs from portfolio currency
         portfolio = validated_data['portfolio']
-        portfolio_currency = portfolio.base_currency or portfolio.currency  # Use base_currency first
+        portfolio_currency = portfolio.base_currency
 
         if currency and currency != portfolio_currency:
             from .services.currency_service import CurrencyService

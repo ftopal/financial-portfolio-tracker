@@ -423,7 +423,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         from .models import PortfolioCashAccount, CashTransaction
         cash_account, created = PortfolioCashAccount.objects.get_or_create(
             portfolio=portfolio,
-            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency or portfolio.currency}
+            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
         )
 
         # Create cash transaction
@@ -458,7 +458,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
         from .models import PortfolioCashAccount, CashTransaction
         cash_account, created = PortfolioCashAccount.objects.get_or_create(
             portfolio=portfolio,
-            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency or portfolio.currency}
+            defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
         )
 
         if cash_account.balance < amount:
@@ -553,7 +553,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
     def value(self, request, pk=None):
         """Get portfolio value in specified currency"""
         portfolio = self.get_object()
-        currency = request.query_params.get('currency', portfolio.currency)
+        currency = request.query_params.get('currency', portfolio.base_currency)
         date = request.query_params.get('date')
 
         if date:
@@ -567,7 +567,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             return Response({
                 'portfolio_id': portfolio.id,
                 'portfolio_name': portfolio.name,
-                'base_currency': portfolio.currency,
+                'base_currency': portfolio.base_currency,
                 'target_currency': currency,
                 'value': value,
                 'date': date or timezone.now().date()
@@ -662,7 +662,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
                 return Response({
                     'portfolio_id': portfolio.id,
                     'portfolio_name': portfolio.name,
-                    'base_currency': portfolio.currency,
+                    'base_currency': portfolio.base_currency,
                     'chart_data': [],
                     'total_value': 0,
                     'message': 'No currency exposure data available'
@@ -671,7 +671,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             # Get target currency for conversion (or use portfolio base currency)
             target_currency = request.query_params.get('currency')
             if not target_currency:
-                target_currency = portfolio.base_currency or portfolio.currency
+                target_currency = portfolio.base_currency
 
             # Convert ALL amounts to target currency for proper percentage calculation
             converted_exposure = {}
@@ -715,7 +715,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             response_data = {
                 'portfolio_id': portfolio.id,
                 'portfolio_name': portfolio.name,
-                'base_currency': portfolio.currency,
+                'base_currency': portfolio.base_currency,
                 'target_currency': target_currency,
                 'chart_data': chart_data,
                 'total_value': float(total_converted_value),  # Total in target currency
@@ -761,7 +761,7 @@ class PortfolioViewSet(viewsets.ModelViewSet):
             from .models import PortfolioCashAccount
             cash_account, created = PortfolioCashAccount.objects.get_or_create(
                 portfolio=portfolio,
-                defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency or portfolio.currency}
+                defaults={'balance': Decimal('0'), 'currency': portfolio.base_currency}
             )
 
             if created:
