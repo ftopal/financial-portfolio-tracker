@@ -298,7 +298,7 @@ class Command(BaseCommand):
             return
 
         # Get all active portfolios
-        portfolios = Portfolio.objects.filter(is_active=True)
+        portfolios = Portfolio.objects.all()
 
         if not portfolios.exists():
             self.stdout.write(self.style.WARNING("No active portfolios found"))
@@ -402,7 +402,7 @@ class Command(BaseCommand):
                 self.style.SUCCESS("Checking gaps for all portfolios...")
             )
 
-            portfolios = Portfolio.objects.filter(is_active=True)
+            portfolios = Portfolio.objects.all()
 
             for portfolio in portfolios:
                 gap_result = PortfolioHistoryService.get_portfolio_gaps(portfolio)
@@ -438,7 +438,7 @@ class Command(BaseCommand):
                 self.style.SUCCESS(f"Validating {portfolio.name}...")
             )
         else:
-            portfolios = Portfolio.objects.filter(is_active=True)
+            portfolios = Portfolio.objects.all()
             self.stdout.write(
                 self.style.SUCCESS("Validating all portfolios...")
             )
@@ -576,7 +576,7 @@ class Command(BaseCommand):
         if portfolio:
             portfolios = [portfolio]
         else:
-            portfolios = Portfolio.objects.filter(is_active=True)
+            portfolios = Portfolio.objects.all()
 
         self.stdout.write(
             self.style.SUCCESS("📊 Portfolio History Statistics")
@@ -681,7 +681,7 @@ class Command(BaseCommand):
         )
 
         # Test with first active portfolio
-        portfolio = Portfolio.objects.filter(is_active=True).first()
+        portfolio = Portfolio.objects.first()
 
         if not portfolio:
             self.stdout.write(

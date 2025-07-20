@@ -749,7 +749,7 @@ def bulk_portfolio_backfill_task(self, days_back: int = 30, force_update: bool =
     """
     try:
         # Get all active portfolios
-        portfolios = Portfolio.objects.filter(is_active=True)
+        portfolios = Portfolio.objects.all()
 
         if not portfolios.exists():
             return {
@@ -850,7 +850,7 @@ def detect_and_fill_portfolio_gaps_task(self, portfolio_id: int = None, max_gap_
         if portfolio_id:
             portfolios = Portfolio.objects.filter(id=portfolio_id, is_active=True)
         else:
-            portfolios = Portfolio.objects.filter(is_active=True)
+            portfolios = Portfolio.objects.all()
 
         if not portfolios.exists():
             return {
@@ -960,7 +960,7 @@ def validate_portfolio_history_task(self, portfolio_id: int = None):
         if portfolio_id:
             portfolios = Portfolio.objects.filter(id=portfolio_id, is_active=True)
         else:
-            portfolios = Portfolio.objects.filter(is_active=True)
+            portfolios = Portfolio.objects.all()
 
         if not portfolios.exists():
             return {
@@ -1190,7 +1190,7 @@ def test_portfolio_history_service():
     """Test task to verify portfolio history service is working"""
     try:
         # Get a test portfolio
-        portfolio = Portfolio.objects.filter(is_active=True).first()
+        portfolio = Portfolio.objects.first()
 
         if not portfolio:
             return {
