@@ -595,39 +595,40 @@ class PortfolioHistoryService:
             }
 
     @staticmethod
-    def trigger_portfolio_recalculation(portfolio: Portfolio,
-                                        transaction_date: date = None) -> Dict:
+    def trigger_portfolio_recalculation(portfolio: Portfolio, transaction_date: date = None) -> Dict:
         """
         Trigger portfolio recalculation when transactions are added/modified
-
-        Args:
-            portfolio: Portfolio instance
-            transaction_date: Date of transaction (for targeted recalculation)
-
-        Returns:
-            Dict with recalculation results
         """
         try:
-            if transaction_date:
-                # Recalculate from transaction date to today
+            # Find the earliest transaction date for comprehensive backfill
+            earliest_transaction_query = Transaction.objects.filter(portfolio=portfolio).order_by('transaction_date')
+            earliest_cash_query = None
+
+            # Also check cash transactions
+            if hasattr(portfolio, 'cash_account') and portfolio.cash_account:
+                earliest_cash_query = portfolio.cash_account.transactions.order_by('transaction_date')
+
+            # Find the absolute earliest date
+            earliest_date = None
+
+            if earliest_transaction_query.exists():
+                earliest_date = earliest_transaction_query.first().transaction_date.date()
+
+            if earliest_cash_query and earliest_cash_query.exists():
+                earliest_cash_date = earliest_cash_query.first().transaction_date.date()
+                if earliest_date is None or earliest_cash_date < earliest_date:
+                    earliest_date = earliest_cash_date
+
+            if earliest_date:
+                logger.info(f"Starting backfill for {portfolio.name} from earliest transaction date: {earliest_date}")
                 return PortfolioHistoryService.backfill_portfolio_history(
-                    portfolio, transaction_date, None, force_update=True
+                    portfolio, earliest_date, None, force_update=True
                 )
             else:
-                # Full recalculation
-                oldest_transaction = Transaction.objects.filter(
-                    portfolio=portfolio
-                ).order_by('transaction_date').first()
-
-                if oldest_transaction:
-                    return PortfolioHistoryService.backfill_portfolio_history(
-                        portfolio, oldest_transaction.transaction_date.date(), None, force_update=True
-                    )
-                else:
-                    return {
-                        'success': False,
-                        'error': 'No transactions found for portfolio'
-                    }
+                return {
+                    'success': False,
+                    'error': 'No transactions found for portfolio'
+                }
 
         except Exception as e:
             logger.error(f"Error triggering recalculation for {portfolio.name}: {str(e)}")

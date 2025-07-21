@@ -1,10 +1,8 @@
-# Replace the content of backend/portfolio/signals.py with this fixed version
-
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from django.utils import timezone
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-from .models import Security, Transaction, PriceHistory, Portfolio, PortfolioValueHistory
+from .models import Security, Transaction, PriceHistory, Portfolio, PortfolioValueHistory, CashTransaction
 from .tasks import auto_backfill_on_security_creation, fetch_historical_prices_task, portfolio_transaction_trigger_task, calculate_daily_portfolio_snapshots, auto_backfill_on_security_creation
 import logging
 
@@ -198,6 +196,43 @@ def initialize_portfolio_history_on_creation(sender, instance, created, **kwargs
 
         except Exception as e:
             logger.error(f"Error initializing portfolio history for {instance.name}: {str(e)}")
+
+
+@receiver(post_save, sender=CashTransaction)
+def trigger_portfolio_recalculation_on_cash_transaction(sender, instance, created, **kwargs):
+    """
+    Trigger portfolio recalculation when cash transactions are added/modified
+    """
+    if created:
+        try:
+            portfolio = instance.cash_account.portfolio
+
+            # FIXED: Proper date handling for both datetime and date objects
+            if hasattr(instance.transaction_date, 'date'):
+                # It's a datetime object
+                transaction_date = instance.transaction_date.date()
+            elif isinstance(instance.transaction_date, date):
+                # It's already a date object
+                transaction_date = instance.transaction_date
+            else:
+                # It's a string, convert it
+                if isinstance(instance.transaction_date, str):
+                    transaction_date = datetime.strptime(instance.transaction_date, '%Y-%m-%d').date()
+                else:
+                    transaction_date = instance.transaction_date
+
+            logger.info(f"Cash transaction detected for portfolio {portfolio.name} on {transaction_date}")
+
+            # FIXED: Ensure we're passing a proper date string
+            portfolio_transaction_trigger_task.apply_async(
+                args=[portfolio.id, transaction_date.isoformat()],
+                countdown=5
+            )
+
+            logger.info(f"Portfolio recalculation task queued for {portfolio.name} due to cash transaction")
+
+        except Exception as e:
+            logger.error(f"Error triggering portfolio recalculation for cash transaction: {str(e)}")
 
 
 # =====================

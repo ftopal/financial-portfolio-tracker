@@ -1185,29 +1185,21 @@ class PortfolioValueHistory(models.Model):
     def calculate_portfolio_value_for_date(cls, portfolio, target_date):
         """
         Calculate portfolio value for a specific date.
-
-        Args:
-            portfolio: Portfolio instance
-            target_date: Date to calculate value for (datetime.date)
-
-        Returns:
-            dict: Portfolio value data for the date
         """
         from datetime import datetime
         from .services.price_history_service import PriceHistoryService
 
-        # If target_date is a datetime, convert to date
         if isinstance(target_date, datetime):
             target_date = target_date.date()
 
-        # Get all transactions up to and including the target date
+        # Get all security transactions up to target date
         transactions = portfolio.transactions.filter(
             transaction_date__date__lte=target_date
         ).order_by('transaction_date')
 
-        # Calculate holdings as of the target date
+        # Calculate holdings
         holdings = {}
-        cash_balance = Decimal('0')
+        total_cost = Decimal('0')
 
         for transaction in transactions:
             symbol = transaction.security.symbol
@@ -1220,15 +1212,11 @@ class PortfolioValueHistory(models.Model):
                     'transactions': []
                 }
 
-            # Process transaction based on type
             if transaction.transaction_type == 'BUY':
                 holdings[symbol]['quantity'] += transaction.quantity
                 holdings[symbol]['total_cost'] += transaction.base_amount or (transaction.quantity * transaction.price)
-                # Reduce cash for purchases
-                cash_balance -= transaction.base_amount or (transaction.quantity * transaction.price)
 
             elif transaction.transaction_type == 'SELL':
-                # Calculate cost basis for sold shares (FIFO)
                 sold_quantity = transaction.quantity
                 if holdings[symbol]['quantity'] > 0:
                     cost_per_share = holdings[symbol]['total_cost'] / holdings[symbol]['quantity']
@@ -1236,24 +1224,20 @@ class PortfolioValueHistory(models.Model):
                     holdings[symbol]['total_cost'] -= cost_reduction
                     holdings[symbol]['quantity'] -= sold_quantity
 
-                # Add cash from sales
-                cash_balance += transaction.base_amount or (transaction.quantity * transaction.price)
-
-            elif transaction.transaction_type == 'DIVIDEND':
-                # Add dividend to cash
-                cash_balance += transaction.base_amount or (transaction.quantity * transaction.price)
-
-            # Add transaction to holdings for reference
             holdings[symbol]['transactions'].append(transaction)
 
-        # Get cash account balance if exists
-        if hasattr(portfolio, 'cash_account'):
-            # Use cash account balance as it's more accurate than transaction-based calculation
-            cash_balance = portfolio.cash_account.balance
+        # Calculate ACCURATE cash balance from cash transactions
+        cash_balance = Decimal('0')
+        if hasattr(portfolio, 'cash_account') and portfolio.cash_account:
+            cash_transactions = portfolio.cash_account.transactions.filter(
+                transaction_date__date__lte=target_date
+            ).order_by('transaction_date')
 
-        # Calculate current values using prices on target_date
-        total_value = cash_balance
-        total_cost = Decimal('0')
+            for cash_tx in cash_transactions:
+                cash_balance += cash_tx.amount
+
+        # Calculate holdings value
+        holdings_value = Decimal('0')
         holdings_count = 0
 
         for symbol, holding in holdings.items():
@@ -1261,7 +1245,6 @@ class PortfolioValueHistory(models.Model):
                 holdings_count += 1
                 total_cost += holding['total_cost']
 
-                # Get price for the target date
                 price_on_date = PriceHistoryService.get_price_for_date(
                     holding['security'],
                     target_date
@@ -1269,17 +1252,19 @@ class PortfolioValueHistory(models.Model):
 
                 if price_on_date:
                     holding_value = holding['quantity'] * price_on_date
-                    total_value += holding_value
+                    holdings_value += holding_value
+
+        # FIXED: Correct total value calculation
+        total_value = cash_balance + holdings_value
 
         return {
             'total_value': total_value,
             'total_cost': total_cost,
             'cash_balance': cash_balance,
+            'holdings_value': holdings_value,
             'holdings_count': holdings_count,
-            'unrealized_gains': total_value - total_cost - cash_balance,
-            'total_return_pct': (
-                        (total_value - total_cost - cash_balance) / total_cost * 100) if total_cost > 0 else Decimal(
-                '0'),
+            'unrealized_gains': holdings_value - total_cost,
+            'total_return_pct': ((holdings_value - total_cost) / total_cost * 100) if total_cost > 0 else Decimal('0'),
         }
 
     @classmethod

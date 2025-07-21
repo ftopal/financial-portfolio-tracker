@@ -42,7 +42,7 @@ app.conf.beat_schedule = {
     },
     'update-current-exchange-rates': {
         'task': 'portfolio.tasks.update_exchange_rates',
-        'schedule': crontab(minute='0', hour='*/4'),  # Every 4 hours for current rates
+        'schedule': crontab(minute='0', hour='*/1'),  # Every 1 hours for current rates
         'args': (['USD', 'EUR', 'GBP'], ['USD', 'EUR', 'GBP'])
     },
 
@@ -51,7 +51,7 @@ app.conf.beat_schedule = {
     'cleanup-old-price-history-enhanced': {
         'task': 'portfolio.tasks.cleanup_old_price_history',
         'schedule': crontab(hour='4', minute='30'),  # Daily at 4:30 AM
-        'args': (730,),  # Keep 2 years of price data instead of 1 year
+        'args': (7300,),  # Keep 20 years of price data instead of 1 year
         'options': {
             'queue': 'maintenance',
             'routing_key': 'maintenance.price_cleanup',

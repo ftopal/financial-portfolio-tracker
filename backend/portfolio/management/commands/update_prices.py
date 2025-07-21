@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand
-from portfolio.models import Stock
+from portfolio.models import Security
 import yfinance as yf
 from decimal import Decimal
 from django.utils import timezone
@@ -9,7 +9,7 @@ class Command(BaseCommand):
     help = 'Update all stock prices from Yahoo Finance'
 
     def handle(self, *args, **options):
-        stocks = Stock.objects.all()
+        stocks = Security.objects.all()
         updated = 0
         failed = 0
 
