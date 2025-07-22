@@ -11,6 +11,8 @@ from .services.currency_service import CurrencyService
 from .services.price_history_service import PriceHistoryService
 from .services.portfolio_history_service import PortfolioHistoryService
 from datetime import date, timedelta, datetime, time
+from .utils import is_market_open, is_market_open_for_security, should_update_security_prices
+from django.db.models import Q
 from typing import List, Optional
 import time
 import logging
@@ -150,19 +152,30 @@ def update_security_price(self, security_id):
 
 @shared_task
 def update_all_security_prices():
-    """Update all security prices"""
-    # Optional: Check if market is open
-    from .utils import is_market_open
+    """
+    Update all security prices - Enhanced version that respects different market hours
+    """
+    from .utils import is_market_open, should_update_security_prices
+
+    # Check if we should skip ALL updates based on settings
     if hasattr(settings, 'CHECK_MARKET_HOURS') and settings.CHECK_MARKET_HOURS:
+        # For backward compatibility, if CHECK_MARKET_HOURS is enabled,
+        # we still check US market hours for the global check
         if not is_market_open():
-            logger.info("Market is closed, skipping price update")
-            return {'message': 'Market closed', 'updated': 0}
+            logger.info("US Market is closed and CHECK_MARKET_HOURS is enabled, but checking individual securities")
 
-    # Update only active securities
-    securities = Security.objects.filter(is_active=True)
-    results = {'updated': 0, 'failed': 0, 'securities': []}
+    # Get securities that should be updated based on their respective market hours
+    securities_to_update = should_update_security_prices()
 
-    for security in securities:
+    results = {'updated': 0, 'failed': 0, 'skipped_closed_markets': 0}
+
+    if securities_to_update.count() == 0:
+        logger.info("No securities need updating - all relevant markets are closed")
+        return {'message': 'All relevant markets closed', 'updated': 0}
+
+    logger.info(f"Found {securities_to_update.count()} securities with open markets to update")
+
+    for security in securities_to_update:
         try:
             # Use sub-task for each security
             update_security_price.delay(security.id)
@@ -173,6 +186,209 @@ def update_all_security_prices():
 
     logger.info(f"Queued price updates: {results['updated']} securities")
     return results
+
+
+@shared_task
+def update_securities_by_exchange(exchange):
+    """
+    Update all securities from a specific exchange
+
+    Args:
+        exchange: Exchange code (e.g., 'LSE', 'NYSE', 'NASDAQ')
+    """
+    securities = Security.objects.filter(
+        is_active=True,
+        exchange__iexact=exchange  # Case insensitive match
+    )
+
+    results = {'updated': 0, 'failed': 0, 'exchange': exchange}
+
+    # Check if this exchange's market is open
+    from .utils import get_market_timezone, get_market_hours
+    market_tz = get_market_timezone(exchange)
+    open_time, close_time = get_market_hours(exchange)
+
+    now = datetime.now(market_tz)
+    current_time = now.time()
+
+    # Skip weekends
+    if now.weekday() >= 5:
+        logger.info(f"Skipping {exchange} update - weekend")
+        return {'message': f'{exchange} market closed - weekend', 'updated': 0}
+
+    # Check market hours (unless it's crypto)
+    is_crypto = securities.filter(security_type='CRYPTO').exists()
+    if not is_crypto:
+        if not (open_time <= current_time <= close_time):
+            logger.info(
+                f"Skipping {exchange} update - market closed (current time: {current_time}, market hours: {open_time}-{close_time})")
+            return {'message': f'{exchange} market closed', 'updated': 0}
+
+    logger.info(f"Updating {securities.count()} securities from {exchange}")
+
+    for security in securities:
+        try:
+            update_security_price.delay(security.id)
+            results['updated'] += 1
+        except Exception as e:
+            results['failed'] += 1
+            logger.error(f"Failed to queue update for {security.symbol}: {str(e)}")
+
+    return results
+
+
+@shared_task
+def update_securities_by_country(country_code):
+    """
+    Update all securities from a specific country
+
+    Args:
+        country_code: Country code (e.g., 'US', 'GB', 'DE')
+    """
+    securities = Security.objects.filter(
+        is_active=True,
+        country__iexact=country_code  # Case insensitive match
+    )
+
+    results = {'updated': 0, 'failed': 0, 'country': country_code}
+
+    # Check if this country's market is open
+    from .utils import is_market_open_for_security
+
+    securities_to_update = []
+    for security in securities:
+        if is_market_open_for_security(security):
+            securities_to_update.append(security)
+
+    if not securities_to_update:
+        logger.info(f"Skipping {country_code} update - market closed")
+        return {'message': f'{country_code} market closed', 'updated': 0}
+
+    logger.info(f"Updating {len(securities_to_update)} securities from {country_code}")
+
+    for security in securities_to_update:
+        try:
+            update_security_price.delay(security.id)
+            results['updated'] += 1
+        except Exception as e:
+            results['failed'] += 1
+            logger.error(f"Failed to queue update for {security.symbol}: {str(e)}")
+
+    return results
+
+
+@shared_task
+def update_global_market_prices():
+    """
+    Smart global update that updates securities based on their individual market hours
+    This is the new recommended task for comprehensive price updates
+    """
+    # Major market regions and their typical update priorities
+    market_regions = [
+        ('US', ['NYSE', 'NASDAQ', 'AMEX']),
+        ('GB', ['LSE', 'LON']),
+        ('DE', ['FRA', 'XETRA']),
+        ('FR', ['PAR']),
+        ('JP', ['TSE', 'JPX']),
+        ('HK', ['HKG', 'HKEX']),
+        ('AU', ['ASX']),
+        ('CA', ['TSX', 'TSXV']),
+    ]
+
+    total_updated = 0
+    total_failed = 0
+    market_status = {}
+
+    # Also update crypto which is always active
+    crypto_securities = Security.objects.filter(
+        is_active=True,
+        security_type='CRYPTO'
+    )
+
+    if crypto_securities.exists():
+        logger.info(f"Updating {crypto_securities.count()} cryptocurrency prices")
+        for security in crypto_securities:
+            try:
+                update_security_price.delay(security.id)
+                total_updated += 1
+            except Exception as e:
+                total_failed += 1
+                logger.error(f"Failed to queue crypto update for {security.symbol}: {str(e)}")
+
+        market_status['CRYPTO'] = {'updated': crypto_securities.count(), 'status': 'always_open'}
+
+    # Check each market region
+    for country_code, exchanges in market_regions:
+        try:
+            # FIXED: Use separate queries to avoid iexact__in issue
+            # Get securities from this region by country
+            country_securities = Security.objects.filter(
+                is_active=True,
+                security_type__in=['STOCK', 'ETF', 'BOND', 'MUTUAL_FUND', 'INDEX'],
+                country__iexact=country_code
+            )
+
+            # Get securities from this region by exchange using Q objects
+            from django.db.models import Q
+            exchange_q = Q()
+            for exchange in exchanges:
+                exchange_q |= Q(exchange__iexact=exchange)
+
+            exchange_securities = Security.objects.filter(
+                is_active=True,
+                security_type__in=['STOCK', 'ETF', 'BOND', 'MUTUAL_FUND', 'INDEX']
+            ).filter(exchange_q)
+
+            # Combine both querysets using union
+            region_securities = country_securities.union(exchange_securities)
+
+            if not region_securities.exists():
+                continue
+
+            # Check if market is open for this region using a sample security
+            sample_security = region_securities.first()
+            from .utils import is_market_open_for_security
+
+            if is_market_open_for_security(sample_security):
+                logger.info(f"Market open for {country_code} - updating {region_securities.count()} securities")
+
+                region_updated = 0
+                region_failed = 0
+
+                for security in region_securities:
+                    try:
+                        update_security_price.delay(security.id)
+                        region_updated += 1
+                        total_updated += 1
+                    except Exception as e:
+                        region_failed += 1
+                        total_failed += 1
+                        logger.error(f"Failed to queue update for {security.symbol}: {str(e)}")
+
+                market_status[country_code] = {
+                    'updated': region_updated,
+                    'failed': region_failed,
+                    'status': 'open'
+                }
+            else:
+                logger.info(f"Market closed for {country_code} - skipping {region_securities.count()} securities")
+                market_status[country_code] = {
+                    'updated': 0,
+                    'securities_count': region_securities.count(),
+                    'status': 'closed'
+                }
+
+        except Exception as e:
+            logger.error(f"Error processing {country_code} market: {str(e)}")
+            market_status[country_code] = {'status': 'error', 'error': str(e)}
+
+    logger.info(f"Global market update complete: {total_updated} updated, {total_failed} failed")
+
+    return {
+        'total_updated': total_updated,
+        'total_failed': total_failed,
+        'market_status': market_status
+    }
 
 
 @shared_task

@@ -104,12 +104,12 @@ DATABASES = {
     }
 }
 
-import sys
-if 'test' in sys.argv:
-    DATABASES['default'] = {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': ':memory:'
-    }
+#import sys
+#if 'test' in sys.argv:
+#    DATABASES['default'] = {
+#        'ENGINE': 'django.db.backends.sqlite3',
+#        'NAME': ':memory:'
+#    }
 
 
 # Password validation
@@ -136,8 +136,91 @@ CELERY_RESULT_BACKEND = 'django-db'  # Store results in Django database
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'US/Eastern'  # For stock market hours
+CELERY_TIMEZONE = 'UTC'  # For stock market hours
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# Keep existing behavior for gradual migration
+LEGACY_US_ONLY_MODE = False  # Set to True to keep old US-only behavior
+
+# Transition settings - you can enable these one by one
+ENABLE_UK_MARKET_UPDATES = True
+ENABLE_EUROPEAN_MARKET_UPDATES = True
+ENABLE_ASIAN_MARKET_UPDATES = True
+ENABLE_CRYPTO_24_7_UPDATES = True
+
+# Market hours checking behavior
+CHECK_MARKET_HOURS = True  # Set to False to disable all market hours checking
+
+# Multi-exchange support settings
+ENABLE_MULTI_EXCHANGE_UPDATES = True  # Enable the new multi-exchange system
+
+# Price update configuration
+PRICE_UPDATE_SETTINGS = {
+    # Global settings
+    'CHECK_MARKET_HOURS_GLOBALLY': False,  # If True, only update when US market is open (old behavior)
+    'RESPECT_INDIVIDUAL_MARKET_HOURS': True,  # If True, check each security's market hours
+
+    # Update frequencies (in minutes) by market type
+    'UPDATE_FREQUENCIES': {
+        'US_MARKET': 15,  # Every 15 minutes during US market hours
+        'UK_MARKET': 20,  # Every 20 minutes during UK market hours
+        'EUROPEAN_MARKET': 20,  # Every 20 minutes during European market hours
+        'ASIAN_MARKET': 30,  # Every 30 minutes during Asian market hours
+        'CRYPTO': 60,  # Every hour for crypto (24/7)
+        'AFTER_HOURS': 30,  # Every 30 minutes for after-hours trading
+        'PRE_MARKET': 30,  # Every 30 minutes for pre-market trading
+    },
+
+    # API rate limiting
+    'BATCH_SIZE_BY_REGION': {
+        'US': 20,  # Process 20 US securities at once
+        'GB': 15,  # Process 15 UK securities at once
+        'EUR': 15,  # Process 15 European securities at once
+        'ASIA': 10,  # Process 10 Asian securities at once
+        'OTHER': 10,  # Process 10 other securities at once
+    },
+
+    # Retry settings for different regions
+    'RETRY_DELAYS': {
+        'US': 60,  # 1 minute retry delay for US markets
+        'GB': 90,  # 1.5 minute retry delay for UK markets
+        'OTHER': 120,  # 2 minute retry delay for other markets
+    },
+}
+
+# Market holiday configuration (optional - for future enhancement)
+MARKET_HOLIDAYS = {
+    'US': [
+        # US market holidays (you can populate this)
+        # '2025-01-01',  # New Year's Day
+        # '2025-07-04',  # Independence Day
+        # Add more as needed
+    ],
+    'GB': [
+        # UK market holidays
+        # '2025-01-01',  # New Year's Day
+        # '2025-12-25',  # Christmas Day
+    ],
+    # Add more countries as needed
+}
+
+# Regional API endpoints (for future multi-provider support)
+MARKET_DATA_PROVIDERS = {
+    'DEFAULT': 'yahoo',  # Default provider
+    'PROVIDERS': {
+        'yahoo': {
+            'regions': ['US', 'GB', 'DE', 'FR', 'JP', 'HK', 'AU', 'CA'],
+            'rate_limit': 2000,  # requests per hour
+            'supports_crypto': True,
+        },
+        # Future providers can be added here
+        # 'alpha_vantage': {
+        #     'regions': ['US', 'GB'],
+        #     'rate_limit': 5,  # requests per minute (free tier)
+        #     'supports_crypto': False,
+        # },
+    }
+}
 
 LOGGING = {
     'version': 1,
@@ -230,6 +313,23 @@ LOGGING = {
         #     'propagate': False,
         # },
     },
+}
+
+# Enhanced logging for market hours
+LOGGING['loggers']['portfolio.market_hours'] = {
+    'handlers': ['console', 'file'],
+    'level': 'INFO',
+    'propagate': True,
+}
+
+# Add market hours specific log file if desired
+LOGGING['handlers']['market_hours_file'] = {
+    'level': 'INFO',
+    'class': 'logging.handlers.RotatingFileHandler',
+    'filename': os.path.join(BASE_DIR, 'logs', 'market_hours.log'),
+    'maxBytes': 1024*1024*5,  # 5 MB
+    'backupCount': 5,
+    'formatter': 'verbose',
 }
 
 # Internationalization

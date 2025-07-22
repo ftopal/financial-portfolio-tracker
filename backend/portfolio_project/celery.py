@@ -16,23 +16,116 @@ app.autodiscover_tasks()
 
 # Configure periodic tasks
 app.conf.beat_schedule = {
-    # Security price updates
-    'update-security-prices-every-15-minutes': {
-        'task': 'portfolio.tasks.update_all_security_prices',
-        'schedule': crontab(minute='*/15', hour='9-16', day_of_week='1-5'),  # Every 15 min, 9AM-4PM, Mon-Fri
-    },
-    'update-security-prices-at-market-open': {
-        'task': 'portfolio.tasks.update_all_security_prices',
-        'schedule': crontab(minute='30', hour='9', day_of_week='1-5'),  # 9:30 AM Mon-Fri
-    },
-    'update-security-prices-at-market-close': {
-        'task': 'portfolio.tasks.update_all_security_prices',
-        'schedule': crontab(minute='0', hour='16', day_of_week='1-5'),  # 4:00 PM Mon-Fri
-    },
     'update-crypto-prices-hourly': {
         'task': 'portfolio.tasks.update_securities_by_type',
         'schedule': crontab(minute='0'),  # Every hour for crypto
         'args': ('CRYPTO',)
+    },
+
+    # ENHANCED: Global market-aware price updates
+    # This replaces the need for the old update-security-prices-every-15-minutes
+    # but we'll keep both for backward compatibility during transition
+    'update-global-market-prices-every-15-minutes': {
+        'task': 'portfolio.tasks.update_global_market_prices',
+        'schedule': crontab(minute='*/15'),  # Every 15 minutes, all day
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.global',
+            'priority': 8
+        }
+    },
+
+    # ENHANCED: Update UK/European markets during their hours
+    'update-uk-securities-during-uk-hours': {
+        'task': 'portfolio.tasks.update_securities_by_country',
+        'schedule': crontab(minute='*/20', hour='8-16', day_of_week='1-5'),  # Every 20 min, 8AM-4PM GMT
+        'args': ('GB',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.uk',
+            'priority': 7
+        }
+    },
+
+    # ENHANCED: Update European securities during European hours
+    'update-european-securities-morning': {
+        'task': 'portfolio.tasks.update_securities_by_country',
+        'schedule': crontab(minute='*/20', hour='9-17', day_of_week='1-5'),  # Every 20 min, 9AM-5PM CET
+        'args': ('DE',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.europe',
+            'priority': 7
+        }
+    },
+
+    # ENHANCED: Update Asian markets during their hours (early morning UTC)
+    'update-asian-securities-tokyo': {
+        'task': 'portfolio.tasks.update_securities_by_country',
+        'schedule': crontab(minute='*/30', hour='0-6', day_of_week='1-5'),  # Every 30 min, 12AM-6AM UTC (9AM-3PM JST)
+        'args': ('JP',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.asia',
+            'priority': 6
+        }
+    },
+
+    'update-asian-securities-hongkong': {
+        'task': 'portfolio.tasks.update_securities_by_country',
+        'schedule': crontab(minute='*/30', hour='1-8', day_of_week='1-5'),  # Every 30 min, 1AM-8AM UTC (9AM-4PM HKT)
+        'args': ('HK',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.asia',
+            'priority': 6
+        }
+    },
+
+    # ENHANCED: Specific exchange updates for major exchanges
+    'update-lse-securities': {
+        'task': 'portfolio.tasks.update_securities_by_exchange',
+        'schedule': crontab(minute='*/15', hour='8-16', day_of_week='1-5'),  # Every 15 min during LSE hours
+        'args': ('LSE',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.lse',
+            'priority': 8
+        }
+    },
+
+    'update-frankfurt-securities': {
+        'task': 'portfolio.tasks.update_securities_by_exchange',
+        'schedule': crontab(minute='*/20', hour='9-17', day_of_week='1-5'),  # Every 20 min during Frankfurt hours
+        'args': ('FRA',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.frankfurt',
+            'priority': 7
+        }
+    },
+
+    # ENHANCED: Pre-market and after-hours updates for US securities
+    'update-us-premarket': {
+        'task': 'portfolio.tasks.update_securities_by_country',
+        'schedule': crontab(minute='*/30', hour='8-9', day_of_week='1-5'),  # Every 30 min, 8-9AM ET (pre-market)
+        'args': ('US',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.us_premarket',
+            'priority': 6
+        }
+    },
+
+    'update-us-afterhours': {
+        'task': 'portfolio.tasks.update_securities_by_country',
+        'schedule': crontab(minute='*/30', hour='16-20', day_of_week='1-5'),  # Every 30 min, 4-8PM ET (after-hours)
+        'args': ('US',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.us_afterhours',
+            'priority': 5
+        }
     },
 
     # Exchange rate updates (ENHANCED)
@@ -239,6 +332,23 @@ app.conf.update(
         'portfolio.tasks.backfill_security_prices_task': {
             'queue': 'price_updates',
             'routing_key': 'price_updates.backfill',
+        },
+        'portfolio.tasks.update_global_market_prices': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.global',
+        },
+        'portfolio.tasks.update_securities_by_exchange': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.exchange',
+        },
+        'portfolio.tasks.update_securities_by_country': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.country',
+        },
+        # Keep existing routes for backward compatibility
+        'portfolio.tasks.update_security_price': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.individual',
         },
         # Maintenance tasks
         'portfolio.tasks.cleanup_old_portfolio_snapshots': {
