@@ -36,16 +36,16 @@ app.conf.beat_schedule = {
     },
 
     # ENHANCED: Update UK/European markets during their hours
-    'update-uk-securities-during-uk-hours': {
-        'task': 'portfolio.tasks.update_securities_by_country',
-        'schedule': crontab(minute='*/20', hour='8-16', day_of_week='1-5'),  # Every 20 min, 8AM-4PM GMT
-        'args': ('GB',),
-        'options': {
-            'queue': 'price_updates',
-            'routing_key': 'price_updates.uk',
-            'priority': 7
-        }
-    },
+    #'update-uk-securities-during-uk-hours': {
+    #    'task': 'portfolio.tasks.update_securities_by_country',
+    #    'schedule': crontab(minute='*/20', hour='8-17', day_of_week='1-5'),  # Every 20 min, 8AM-4PM GMT
+    #    'args': ('GB',),
+    #    'options': {
+    #        'queue': 'price_updates',
+    #        'routing_key': 'price_updates.uk',
+    #        'priority': 7
+    #    }
+    #},
 
     # ENHANCED: Update European securities during European hours
     'update-european-securities-morning': {
@@ -85,7 +85,7 @@ app.conf.beat_schedule = {
     # ENHANCED: Specific exchange updates for major exchanges
     'update-lse-securities': {
         'task': 'portfolio.tasks.update_securities_by_exchange',
-        'schedule': crontab(minute='*/15', hour='8-16', day_of_week='1-5'),  # Every 15 min during LSE hours
+        'schedule': crontab(minute='*/15', hour='8-17', day_of_week='1-5'),  # Every 15 min during LSE hours
         'args': ('LSE',),
         'options': {
             'queue': 'price_updates',
@@ -98,6 +98,17 @@ app.conf.beat_schedule = {
         'task': 'portfolio.tasks.update_securities_by_exchange',
         'schedule': crontab(minute='*/20', hour='9-17', day_of_week='1-5'),  # Every 20 min during Frankfurt hours
         'args': ('FRA',),
+        'options': {
+            'queue': 'price_updates',
+            'routing_key': 'price_updates.frankfurt',
+            'priority': 7
+        }
+    },
+
+    'update-amsterdam-securities': {
+        'task': 'portfolio.tasks.update_securities_by_exchange',
+        'schedule': crontab(minute='*/15', hour='9-18', day_of_week='1-5'),  # Every 15 min during Amsterdam hours
+        'args': ('AMS',),
         'options': {
             'queue': 'price_updates',
             'routing_key': 'price_updates.frankfurt',

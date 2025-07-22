@@ -34,7 +34,6 @@ def get_market_timezone(exchange_or_country):
         'NYSE': 'US/Eastern',
         'NASDAQ': 'US/Eastern',
         'AMEX': 'US/Eastern',
-        'NYSE': 'US/Eastern',
         'US': 'US/Eastern',
 
         # UK Exchanges
@@ -110,7 +109,6 @@ def get_market_hours(exchange_or_country):
         'NYSE': (time(9, 30), time(16, 0)),  # 9:30 AM - 4:00 PM ET
         'NASDAQ': (time(9, 30), time(16, 0)),
         'AMEX': (time(9, 30), time(16, 0)),
-        'NYSE': (time(9, 30), time(16, 0)),
         'US': (time(9, 30), time(16, 0)),
 
         # UK Markets
